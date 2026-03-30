@@ -1,0 +1,401 @@
+# CCA Test Pipeline — One test per pipeline, always isolated.
+#
+# Each test runs in its own pipeline with:
+#   - GitLab environment (deployment history per test)
+#   - Phoenix project (isolated trace history per test)
+#
+# Trigger via Makefile:  make test NAME=eva-code-trace
+# Or via dashboard:      Run / Run All buttons (each test = separate pipeline)
+# Or via API:            POST /pipeline  variables[RUN_TEST]=eva-code-trace
+#
+# RUN_TEST values:
+#   Individual:  eva-code-trace, code-trace, bash-execution, etc.
+#   Build only:  build
+#
+# Group runs (all, all-user, etc.) are handled by the dashboard — it fires
+# one pipeline per test, never groups multiple tests into one pipeline.
+
+stages:
+  - build
+  - preflight
+  - test
+  - deploy
+
+# Only trigger from web UI, API, or scheduled — NOT on push.
+# This prevents 25 "manual" jobs cluttering every commit.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
+    - if: $CI_PIPELINE_SOURCE == "trigger"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+variables:
+  RUN_TEST: ""
+  PHOENIX_PROJECT_NAME: "cca-tests"
+  CCA_RUN_JUDGE: "1"
+  CCA_TEST_API_KEY: "cca_k_58591dcb6e1ab9e4dee1fcc30d47f0c6552599741e0f3d55"
+  GIT_STRATEGY: fetch
+
+# ── Reusable template for all test jobs ──
+.test-base:
+  stage: test
+  image: 192.168.4.204:5000/cca-tests/test-runner:latest
+  needs: [health-check]
+  resource_group: cca-llm
+  timeout: 45m                    # Safety net only — the test client's SSE idle timeout (120s) is the real watchdog
+  artifacts:
+    when: always
+    paths:
+      - "report-*.xml"
+      - "reports/"
+    reports:
+      junit: "report-*.xml"
+    expire_in: 90 days
+  after_script:
+    # Upload reports to CCA server for local storage on Spark1
+    - |
+      CCA_URL="${CCA_BASE_URL:-http://192.168.4.205:8500}"
+      for dir in reports/*/; do
+        if [ -d "$dir" ]; then
+          ARGS="-F pipeline_id=$CI_PIPELINE_ID -F test_name=$RUN_TEST"
+          [ -f "${dir}report.md" ] && ARGS="$ARGS -F report=@${dir}report.md"
+          [ -f "${dir}metadata.json" ] && ARGS="$ARGS -F metadata=@${dir}metadata.json"
+          [ -f "${dir}tool_calls.json" ] && ARGS="$ARGS -F tool_calls=@${dir}tool_calls.json"
+          [ -f "${dir}cca_debug.log" ] && ARGS="$ARGS -F debug_log=@${dir}cca_debug.log"
+          curl -sf -X POST "$CCA_URL/admin/upload-report" $ARGS || true
+        fi
+      done
+  allow_failure: true
+
+# ════════════════════════════════════════════
+#  BUILD — rebuild test image when deps change
+# ════════════════════════════════════════════
+
+build-test-image:
+  stage: build
+  image: docker:latest
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  script:
+    - docker login -u ${REGISTRY_USER:-admin} -p ${REGISTRY_PASS} 192.168.4.204:5000
+    - docker build -t 192.168.4.204:5000/cca-tests/test-runner:latest -f Dockerfile.test .
+    - docker push 192.168.4.204:5000/cca-tests/test-runner:latest
+  rules:
+    - if: '$RUN_TEST == "build"'
+
+# ════════════════════════════════════════════
+#  PREFLIGHT — auto-runs before every test
+# ════════════════════════════════════════════
+
+health-check:
+  stage: preflight
+  image: 192.168.4.204:5000/cca-tests/test-runner:latest
+  script:
+    - echo "=== Analects Server ==="
+    - curl -sf --max-time 10 $CCA_BASE_URL/health | python3 -m json.tool
+    - echo "=== vLLM Server ==="
+    - curl -sf --max-time 10 ${VLLM_BASE_URL%/v1}/health && echo "OK"
+    - echo "=== Phoenix ==="
+    - curl -sf --max-time 5 $PHOENIX_URL/ > /dev/null && echo "OK" || echo "WARNING - unreachable (non-fatal)"
+  rules:
+    - if: $RUN_TEST    # Runs whenever RUN_TEST is set (any test trigger)
+  timeout: 2m
+
+# ════════════════════════════════════════════
+#  USER TESTS
+# ════════════════════════════════════════════
+
+test-new-user-onboarding:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "new-user-onboarding"
+  script:
+    - python -m pytest tests/user/test_new_user_onboarding.py -v --tb=short --with-judge --junitxml=report-new-user-onboarding.xml
+  environment:
+    name: test/user/new-user-onboarding
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "new-user-onboarding"'
+
+test-profile-crud:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "profile-crud"
+  script:
+    - python -m pytest tests/user/test_profile_crud.py -v --tb=short --with-judge --junitxml=report-profile-crud.xml
+  environment:
+    name: test/user/profile-crud
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "profile-crud"'
+
+test-returning-user-memory:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "returning-user-memory"
+  script:
+    - python -m pytest tests/user/test_returning_user_memory.py -v --tb=short --with-judge --junitxml=report-returning-user.xml
+  environment:
+    name: test/user/returning-user-memory
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "returning-user-memory"'
+
+# ════════════════════════════════════════════
+#  WEBSEARCH TESTS
+# ════════════════════════════════════════════
+
+test-web-search-flow:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "web-search-flow"
+  script:
+    - python -m pytest tests/websearch/test_web_search_flow.py -v --tb=short --with-judge --junitxml=report-web-search.xml
+  environment:
+    name: test/websearch/web-search-flow
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "web-search-flow"'
+
+# ════════════════════════════════════════════
+#  CODER TESTS
+# ════════════════════════════════════════════
+
+test-bash-execution:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "bash-execution"
+  script:
+    - python -m pytest tests/coder/test_bash_execution.py -v --tb=short --with-judge --junitxml=report-bash-execution.xml
+  environment:
+    name: test/coder/bash-execution
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "bash-execution"'
+
+test-code-edit-flow:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "code-edit-flow"
+  script:
+    - python -m pytest tests/coder/test_code_edit_flow.py -v --tb=short --with-judge --junitxml=report-code-edit.xml
+  environment:
+    name: test/coder/code-edit-flow
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "code-edit-flow"'
+
+test-code-intelligence:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "code-intelligence"
+  script:
+    - python -m pytest tests/coder/test_code_intelligence.py -v --tb=short --with-judge --junitxml=report-code-intelligence.xml
+  environment:
+    name: test/coder/code-intelligence
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "code-intelligence"'
+
+test-code-trace:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "code-trace"
+  script:
+    - python -m pytest tests/coder/test_code_trace.py -v --tb=short --with-judge --junitxml=report-code-trace.xml
+  environment:
+    name: test/coder/code-trace
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "code-trace"'
+
+test-codebase-search:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "codebase-search"
+  script:
+    - python -m pytest tests/coder/test_codebase_search.py -v --tb=short --with-judge --junitxml=report-codebase-search.xml
+  environment:
+    name: test/coder/codebase-search
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "codebase-search"'
+
+test-document-workflow:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "document-workflow"
+  script:
+    - python -m pytest tests/coder/test_document_workflow.py -v --tb=short --with-judge --junitxml=report-document-workflow.xml
+  environment:
+    name: test/coder/document-workflow
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "document-workflow"'
+
+test-rule-lifecycle:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "rule-lifecycle"
+  script:
+    - python -m pytest tests/coder/test_rule_lifecycle.py -v --tb=short --with-judge --junitxml=report-rule-lifecycle.xml
+  environment:
+    name: test/coder/rule-lifecycle
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "rule-lifecycle"'
+
+test-workspace-indexing:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "workspace-indexing"
+  script:
+    - python -m pytest tests/coder/test_workspace_indexing.py -v --tb=short --with-judge --junitxml=report-workspace-indexing.xml
+  environment:
+    name: test/coder/workspace-indexing
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "workspace-indexing"'
+
+test-api-lookup:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "api-lookup"
+  script:
+    - python -m pytest tests/coder/test_api_lookup.py -v --tb=short --with-judge --junitxml=report-api-lookup.xml
+  environment:
+    name: test/coder/api-lookup
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "api-lookup"'
+
+# ════════════════════════════════════════════
+#  INTEGRATION TESTS
+# ════════════════════════════════════════════
+
+test-cross-session-recall:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "cross-session-recall"
+  script:
+    - python -m pytest tests/integration/test_cross_session_recall.py -v --tb=short --with-judge --junitxml=report-cross-session.xml
+  environment:
+    name: test/integration/cross-session-recall
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "cross-session-recall"'
+
+test-eva-code-trace:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "eva-code-trace"
+  script:
+    - python -m pytest tests/integration/test_eva_code_trace.py -v --tb=short --with-judge --junitxml=report-eva-trace.xml
+  environment:
+    name: test/integration/eva-code-trace
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "eva-code-trace"'
+
+test-eva-full-trace:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "eva-full-trace"
+  script:
+    - python -m pytest tests/integration/test_eva_full_trace.py -v --tb=short --with-judge --junitxml=report-eva-full-trace.xml
+  environment:
+    name: test/integration/eva-full-trace
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "eva-full-trace"'
+
+test-project-scoped-notes:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "project-scoped-notes"
+  script:
+    - python -m pytest tests/integration/test_project_scoped_notes.py -v --tb=short --with-judge --junitxml=report-project-scoped-notes.xml
+  environment:
+    name: test/integration/project-scoped-notes
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "project-scoped-notes"'
+
+test-infra-inspection:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "infra-inspection"
+  script:
+    - python -m pytest tests/integration/test_infra_inspection_flow.py -v --tb=short --with-judge --junitxml=report-infra-inspection.xml
+  environment:
+    name: test/integration/infra-inspection
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "infra-inspection"'
+
+test-knowledge-pipeline:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "knowledge-pipeline"
+  script:
+    - python -m pytest tests/integration/test_knowledge_pipeline.py -v --tb=short --with-judge --junitxml=report-knowledge-pipeline.xml
+  environment:
+    name: test/integration/knowledge-pipeline
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "knowledge-pipeline"'
+
+test-routing-edge-cases:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "routing-edge-cases"
+  script:
+    - python -m pytest tests/integration/test_routing_edge_cases.py -v --tb=short --with-judge --junitxml=report-routing-edge.xml
+  environment:
+    name: test/integration/routing-edge-cases
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "routing-edge-cases"'
+
+test-security-edge-cases:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "security-edge-cases"
+  script:
+    - python -m pytest tests/integration/test_security_edge_cases.py -v --tb=short --with-judge --junitxml=report-security-edge.xml
+  environment:
+    name: test/integration/security-edge-cases
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "security-edge-cases"'
+
+test-tool-isolation:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "tool-isolation"
+  script:
+    - python -m pytest tests/integration/test_tool_isolation.py -v --tb=short --with-judge --junitxml=report-tool-isolation.xml
+  environment:
+    name: test/integration/tool-isolation
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "tool-isolation"'
+
+# ════════════════════════════════════════════
+#  PAGES — deploy CCA test dashboard
+# ════════════════════════════════════════════
+
+pages:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - echo "Deploying CCA test dashboard to GitLab Pages"
+    - ls -la public/
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: '$RUN_TEST == "pages"'
