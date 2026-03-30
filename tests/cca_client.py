@@ -18,6 +18,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
@@ -742,3 +743,147 @@ class TestResourceTracker:
                 self._client.clean_workspace_files(prefix=prefix)
             except Exception as e:
                 log.warning("Tracker cleanup workspace %s: %s", prefix, e)
+
+
+class TestRunContext:
+    """Auto-tracking test context that writes a manifest on completion.
+
+    Wraps CCAClient to auto-capture session IDs and user creation.
+    On finalize(), writes manifest.json to the reports directory.
+    The CI after_script uploads it alongside the report files.
+    Django auto-ingests the manifest into the TestRun registry.
+
+    **Never deletes test data** — that's the dashboard's job via
+    "Clear One" or "Clear All".
+
+    Usage::
+
+        def test_something(test_run):
+            session_id = f"test-xxx-{uuid4().hex[:8]}"
+            test_run.track_session(session_id)
+            r = test_run.chat("Hello", session_id=session_id)
+            # ... assertions ...
+            # On completion: fixture calls finalize() automatically
+    """
+
+    def __init__(self, client: CCAClient, test_node_name: str) -> None:
+        self.client = client  # Direct access for tests that need it
+        self._test_name = self._normalize_name(test_node_name)
+        self._pipeline_id = os.environ.get("CI_PIPELINE_ID", "local")
+        self._user_ids: List[str] = []
+        self._user_names: List[str] = []
+        self._session_ids: List[str] = []
+        self._workspace_prefixes: List[str] = []
+        self._started_at = datetime.utcnow()
+        self._status = "running"
+        self._turns = 0
+        self._route = ""
+
+    @property
+    def base_url(self) -> str:
+        return self.client.base_url
+
+    def chat(self, message: str, session_id: Optional[str] = None, **kwargs) -> "ChatResult":
+        """Send a message via CCA and auto-track the session."""
+        if session_id and session_id not in self._session_ids:
+            self._session_ids.append(session_id)
+        result = self.client.chat(message, session_id=session_id, **kwargs)
+        self._turns += 1
+        if hasattr(result, "route") and result.route and not self._route:
+            self._route = result.route
+        return result
+
+    def track_user(self, name: str, user_id: Optional[str] = None) -> None:
+        """Register a user created by this test."""
+        if name not in self._user_names:
+            self._user_names.append(name)
+        if user_id and user_id not in self._user_ids:
+            self._user_ids.append(user_id)
+
+    def track_session(self, session_id: str) -> None:
+        """Register a session ID created by this test."""
+        if session_id not in self._session_ids:
+            self._session_ids.append(session_id)
+
+    def track_workspace_prefix(self, prefix: str) -> None:
+        """Register a workspace file prefix created by this test."""
+        if prefix not in self._workspace_prefixes:
+            self._workspace_prefixes.append(prefix)
+
+    def resolve_user_id(self, name: str) -> Optional[str]:
+        """Look up a user's ID by name and track it."""
+        user = self.client.find_user_by_name(name)
+        if user:
+            uid = user.get("user_id")
+            if uid and uid not in self._user_ids:
+                self._user_ids.append(uid)
+            return uid
+        return None
+
+    def get_tracked_resources(self) -> dict:
+        """Return a summary of all tracked resources."""
+        return {
+            "user_ids": list(self._user_ids),
+            "user_names": list(self._user_names),
+            "session_ids": list(self._session_ids),
+            "workspace_prefixes": list(self._workspace_prefixes),
+        }
+
+    def finalize(self, failed: bool = False) -> None:
+        """Write manifest.json to the reports directory.
+
+        Called by the test_run fixture teardown. Does NOT delete any data.
+        The manifest is uploaded to CCA by the CI after_script and ingested
+        into the Django TestRun registry.
+        """
+        self._status = "failed" if failed else "passed"
+        elapsed = (datetime.utcnow() - self._started_at).total_seconds()
+
+        # Resolve any unresolved user IDs
+        for name in self._user_names:
+            if not any(name.lower() in (uid or "").lower() for uid in self._user_ids):
+                self.resolve_user_id(name)
+
+        manifest = {
+            "test_name": self._test_name,
+            "pipeline_id": self._pipeline_id,
+            "status": self._status,
+            "route": self._route,
+            "turns": self._turns,
+            "duration_ms": elapsed * 1000,
+            "user_ids": self._user_ids,
+            "user_names": self._user_names,
+            "session_ids": self._session_ids,
+            "workspace_prefixes": self._workspace_prefixes,
+            "phoenix_project": f"test/{self._test_name}",
+            "report_folder": f"P{self._pipeline_id}_{self._test_name}",
+            "finished_at": datetime.utcnow().isoformat(),
+        }
+
+        try:
+            from report_generator import REPORTS_DIR
+            folder = REPORTS_DIR / f"P{self._pipeline_id}_{self._test_name}"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, default=str)
+            )
+            log.info("Wrote manifest: %s (%d users, %d sessions)",
+                     folder.name, len(self._user_ids), len(self._session_ids))
+        except Exception as e:
+            log.warning("Failed to write manifest: %s", e)
+
+    @staticmethod
+    def _normalize_name(node_name: str) -> str:
+        """Convert pytest node name to CI test-name format.
+
+        Examples:
+            "TestNewUserOnboarding::test_new_user_onboarding"
+            → "new-user-onboarding"
+        """
+        # Take the method name part (after ::)
+        name = node_name.split("::")[-1] if "::" in node_name else node_name
+        # Strip test_ prefix
+        if name.startswith("test_"):
+            name = name[5:]
+        # Underscores to hyphens
+        return name.replace("_", "-")

@@ -64,6 +64,7 @@ variables:
           [ -f "${dir}metadata.json" ] && ARGS="$ARGS -F metadata=@${dir}metadata.json"
           [ -f "${dir}tool_calls.json" ] && ARGS="$ARGS -F tool_calls=@${dir}tool_calls.json"
           [ -f "${dir}cca_debug.log" ] && ARGS="$ARGS -F debug_log=@${dir}cca_debug.log"
+          [ -f "${dir}manifest.json" ] && ARGS="$ARGS -F manifest=@${dir}manifest.json"
           curl -sf -X POST "$CCA_URL/admin/upload-report" $ARGS || true
         fi
       done

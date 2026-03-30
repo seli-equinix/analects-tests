@@ -371,6 +371,40 @@ def cca(phoenix_tracer):
     client.close()
 
 
+@pytest.fixture
+def test_run(cca, request):
+    """Auto-tracking test context that persists all test data.
+
+    Creates a TestRunContext that wraps CCAClient with resource tracking.
+    On completion, writes manifest.json to the reports directory (uploaded
+    by CI after_script). Data is NEVER deleted — use the dashboard's
+    "Clear One" or "Clear All" to clean up.
+
+    Usage::
+
+        def test_something(test_run):
+            session_id = f"test-xxx-{uuid4().hex[:8]}"
+            test_run.track_session(session_id)
+            r = test_run.chat("Hello", session_id=session_id)
+            assert r.content
+    """
+    from cca_client import TestRunContext
+    ctx = TestRunContext(cca, request.node.name)
+    yield ctx
+    # Determine if the test failed
+    failed = hasattr(request.node, "rep_call") and request.node.rep_call.failed
+    ctx.finalize(failed=failed)
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Store test result on the item node so the test_run fixture can read it."""
+    import pytest
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+
 @pytest.fixture(autouse=True)
 def require_cca_healthy(cca):
     """Skip all tests if CCA AAAM server is unreachable."""
