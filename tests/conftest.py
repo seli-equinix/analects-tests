@@ -388,7 +388,7 @@ def test_run(cca, request):
             r = test_run.chat("Hello", session_id=session_id)
             assert r.content
     """
-    from cca_client import TestRunContext
+    from .cca_client import TestRunContext
     ctx = TestRunContext(cca, request.node.name)
     yield ctx
     # Determine if the test failed
