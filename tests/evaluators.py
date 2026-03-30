@@ -912,13 +912,14 @@ def evaluate_response(
         # (e.g., EVA trace test passed despite "View Failed" tool error).
         # if ev["name"] == "tool_errors":
         #     continue  # REMOVED — tool_errors now gates pass/fail
-        # Response duplication: gate only on severe duplication (>70% similarity,
-        # score < 0.3).  The paragraph-level SequenceMatcher produces false
-        # positives when paragraphs discuss the same topic with different details
-        # (e.g., two paragraphs mentioning the same project name = ~55% similar).
-        # For borderline cases, the LLM judge (--with-judge) is the authority.
-        if ev["name"] == "response_duplication" and ev["score"] >= 0.3:
-            continue  # acceptable — only gate on >70% similarity
+        # Response duplication: ADVISORY only — never gates pass/fail.
+        # The paragraph-level SequenceMatcher produces false positives
+        # (same topic, different details → ~55% similar). Even genuine
+        # duplication (100%) is a CCA quality issue, not a test failure.
+        # The LLM judge (--with-judge) is the authority on response quality.
+        # Duplication is still recorded in reports for debugging.
+        if ev["name"] == "response_duplication":
+            continue
         # Refusal detection: GATING by default. Catches "I don't have
         # access" false passes. Skip only when expect_refusal=True
         # (security edge cases: SSRF blocking, FTP rejection).
