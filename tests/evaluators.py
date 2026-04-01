@@ -255,9 +255,10 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
             "explanation": "No tool errors",
         }
 
-    # Check for recovery: if a "File created" or "completed" label follows
-    # a "Create Failed" label, the error was self-corrected.
-    success_keywords = ("created", "completed", "replaced", "file created")
+    # Check for recovery: if a success label follows an error label,
+    # the error was self-corrected. Covers file ops ("File created")
+    # and command retries ("Command python3 succeeded").
+    success_keywords = ("created", "completed", "replaced", "file created", "succeeded")
     recovered = set()
     for i, err in enumerate(errors):
         err_lower = err.lower()
