@@ -27,7 +27,8 @@ class TestNutanixSdkValidation:
     @pytest.mark.parametrize("module,expected_pkg", list(NUTANIX_MODULES.items()))
     def test_module_search(self, knowledge_client, module, expected_pkg):
         """Validate search_docs returns correct Nutanix doc for each module."""
-        data = search_docs(knowledge_client, f"nutanix {module}")
+        # Module names are like "nutanix-vmm" — search the full name
+        data = search_docs(knowledge_client, module)
         results = data.get("results", [])
 
         # Must have at least 1 result
