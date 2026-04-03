@@ -6,7 +6,7 @@ files (heredoc, redirect, python -c write, tee) and redirects to str_replace_edi
 
 import pytest
 
-from confucius.orchestrator.extensions.command_line.base import CommandLineExtension
+from confucius.orchestrator.extensions.command_line.base import _check_file_write
 
 
 class TestFileWriteDetection:
@@ -34,7 +34,7 @@ class TestFileWriteDetection:
         ],
     )
     def test_blocks_file_write(self, command: str, label: str):
-        result = CommandLineExtension._check_file_write(command)
+        result = _check_file_write(command)
         assert result is not None, f"Expected '{command}' to be blocked as '{label}'"
         assert "str_replace_editor" in result
         assert "BLOCKED" in result
@@ -63,11 +63,11 @@ class TestFileWriteDetection:
         ],
     )
     def test_allows_safe_commands(self, command: str):
-        result = CommandLineExtension._check_file_write(command)
+        result = _check_file_write(command)
         assert result is None, f"Expected '{command}' to be allowed, got: {result}"
 
     def test_rejection_message_has_examples(self):
-        result = CommandLineExtension._check_file_write("cat << EOF > /workspace/test.py\nEOF")
+        result = _check_file_write("cat << EOF > /workspace/test.py\nEOF")
         assert result is not None
         assert '"command": "create"' in result
         assert '"path":' in result
