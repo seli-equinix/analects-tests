@@ -55,8 +55,11 @@ variables:
     expire_in: 90 days
   after_script:
     # Upload reports to CCA server for local storage on Spark1
+    # Uses CCA_TEST_API_KEY for auth (CCA_API_AUTH=1 requires Bearer token)
     - |
       CCA_URL="${CCA_BASE_URL:-http://192.168.4.205:8500}"
+      AUTH=""
+      [ -n "$CCA_TEST_API_KEY" ] && AUTH="-H \"Authorization: Bearer $CCA_TEST_API_KEY\""
       for dir in reports/*/; do
         if [ -d "$dir" ]; then
           ARGS="-F pipeline_id=$CI_PIPELINE_ID -F test_name=$RUN_TEST"
@@ -65,7 +68,7 @@ variables:
           [ -f "${dir}tool_calls.json" ] && ARGS="$ARGS -F tool_calls=@${dir}tool_calls.json"
           [ -f "${dir}cca_debug.log" ] && ARGS="$ARGS -F debug_log=@${dir}cca_debug.log"
           [ -f "${dir}manifest.json" ] && ARGS="$ARGS -F manifest=@${dir}manifest.json"
-          curl -sf -X POST "$CCA_URL/admin/upload-report" $ARGS || true
+          eval curl -sf -X POST "$CCA_URL/admin/upload-report" $AUTH $ARGS || echo "WARN: report upload failed for $dir"
         fi
       done
   allow_failure: true
