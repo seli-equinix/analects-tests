@@ -405,6 +405,20 @@ def pytest_runtest_makereport(item, call):
     setattr(item, f"rep_{rep.when}", rep)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def warn_missing_api_key():
+    """Warn if CCA_TEST_API_KEY is not set — tests will fail on auth-enabled servers."""
+    if not os.getenv("CCA_TEST_API_KEY"):
+        import warnings
+        warnings.warn(
+            "CCA_TEST_API_KEY not set — tests will fail against auth-enabled servers. "
+            "Get the key from: docker exec cca python3 -c "
+            "\"from ui.models import APIKey; print(APIKey.objects.get(name='ci-tests').key)\"",
+            UserWarning,
+            stacklevel=1,
+        )
+
+
 @pytest.fixture(autouse=True)
 def require_cca_healthy(cca):
     """Skip all tests if CCA AAAM server is unreachable."""

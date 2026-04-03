@@ -130,13 +130,18 @@ class CCAClient:
         self.project_name = project_name
         self.api_key = os.getenv("CCA_TEST_API_KEY", "")
         self._session_turns: dict[str, int] = {}  # session_id → turn count
+        # Centralized auth: Bearer token applied to ALL requests (chat + diagnostics)
+        default_headers: dict[str, str] = {}
+        if self.api_key:
+            default_headers["Authorization"] = f"Bearer {self.api_key}"
         self._client = httpx.Client(
+            headers=default_headers,
             timeout=httpx.Timeout(
                 connect=TIMEOUT_CONNECT,
                 read=idle_timeout,
                 write=30.0,
                 pool=30.0,
-            )
+            ),
         )
 
     def close(self) -> None:
@@ -431,9 +436,8 @@ class CCAClient:
         # Build headers with W3C trace context propagation.
         # inject() adds traceparent so server spans become children of this
         # test trace — unified view in Phoenix (one trace per test).
+        # Authorization header is set as default on self._client — no per-call addition needed
         headers: Dict[str, str] = {"X-Session-Id": session_id}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
         if user_id:
             headers["X-User-Id"] = user_id
         if self.project_name:
@@ -556,6 +560,7 @@ class CCAClient:
         resp = self._client.get(
             f"{self.base_url}/users", timeout=TIMEOUT_DIAGNOSTIC
         )
+        resp.raise_for_status()
         return resp.json()
 
     def list_sessions(self) -> Dict[str, Any]:
@@ -563,6 +568,7 @@ class CCAClient:
         resp = self._client.get(
             f"{self.base_url}/sessions", timeout=TIMEOUT_DIAGNOSTIC
         )
+        resp.raise_for_status()
         return resp.json()
 
     def get_stats(self) -> Dict[str, Any]:
@@ -570,6 +576,7 @@ class CCAClient:
         resp = self._client.get(
             f"{self.base_url}/stats", timeout=TIMEOUT_DIAGNOSTIC
         )
+        resp.raise_for_status()
         return resp.json()
 
     def list_models(self) -> Dict[str, Any]:
@@ -669,6 +676,7 @@ class CCAClient:
         resp = self._client.get(
             f"{self.base_url}/workspace/files", timeout=TIMEOUT_DIAGNOSTIC
         )
+        resp.raise_for_status()
         return resp.json()
 
     def clean_workspace_files(self, prefix: str = "") -> Dict[str, Any]:
@@ -680,6 +688,7 @@ class CCAClient:
             params=params,
             timeout=TIMEOUT_DIAGNOSTIC,
         )
+        resp.raise_for_status()
         return resp.json()
 
 
