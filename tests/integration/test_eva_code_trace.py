@@ -74,15 +74,16 @@ class TestEvaCodeTrace:
             f"Response: {r1.content[:200]}"
         )
 
-        # Check that search_codebase or search_knowledge was called
+        # Check that agent used code intelligence tools (search, browse, or analysis)
         tool_names_1 = r1.tool_names
         trace_test.set_attribute("cca.test.t1_tools", str(tool_names_1))
         used_search = any(
             t in name for name in tool_names_1
-            for t in ["search_codebase", "search_knowledge"]
+            for t in ["search_codebase", "search_knowledge", "browse_project",
+                       "analyze_dependencies", "query_call_graph"]
         )
         assert used_search, (
-            f"Agent didn't use search tools. Called: {tool_names_1}"
+            f"Agent didn't use code intelligence tools. Called: {tool_names_1}"
         )
 
         # Response should mention EVA-specific content

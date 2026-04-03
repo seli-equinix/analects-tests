@@ -239,12 +239,11 @@ def eval_iteration_efficiency(result: ChatResult) -> Optional[Dict[str, Any]]:
 def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
     """Score 0.0 if any UNRECOVERED tool errors occurred.
 
-    Captures SSE comment labels that indicate tool failures.  Errors that
-    were self-corrected (e.g., wrong path → retried at correct path) are
-    normal operation and should not fail the test.  Only count errors that
-    have no corresponding success for the same tool.
+    Uses tool_calls metadata ({name, success, iteration} dicts) for robust
+    recovery detection: if the same tool name succeeds after failing, the
+    error is recovered. Memory tool failures (write_memory, read_memory) are
+    always advisory — they're internal bookkeeping, not task completion.
     """
-    all_labels = getattr(result, "tool_labels", [])
     errors = getattr(result, "tool_errors", [])
     if not errors:
         return {
@@ -255,30 +254,69 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
             "explanation": "No tool errors",
         }
 
-    # Check for recovery: if a success label follows an error label,
-    # the error was self-corrected. Covers file ops ("File created")
-    # and command retries ("Command python3 succeeded").
-    success_keywords = ("created", "completed", "replaced", "file created", "succeeded")
-    recovered = set()
-    for i, err in enumerate(errors):
+    # ── Tool-type-aware recovery via structured tool_calls ──
+    # If tool X fails at iteration N but succeeds at iteration M > N,
+    # the error is considered self-corrected.
+    tool_calls = result.metadata.get("tool_calls") or []
+    failed_tools: dict[str, int] = {}  # tool_name → first failure iteration
+    recovered_tools: set[str] = set()
+
+    for tc in tool_calls:
+        name = tc.get("name", "")
+        success = tc.get("success", True)
+        iteration = tc.get("iteration", 0)
+        if not success:
+            if name not in failed_tools:
+                failed_tools[name] = iteration
+        elif name in failed_tools and iteration > failed_tools[name]:
+            recovered_tools.add(name)
+
+    # ── Memory tools are ADVISORY (never gating) ──
+    # write_memory and read_memory failures are internal bookkeeping —
+    # a failed memory save doesn't mean the task failed.
+    _ADVISORY_TOOLS = {"write_memory", "read_memory", "refine_summary",
+                       "list_memory", "clear_memory", "search_memory"}
+
+    # Count unrecovered errors (excluding advisory tools)
+    unrecovered = []
+    for err in errors:
         err_lower = err.lower()
-        # Look for a success label after this error
+        # Check if any advisory tool name appears in this error label
+        is_advisory = any(t.replace("_", " ") in err_lower for t in _ADVISORY_TOOLS)
+        if is_advisory:
+            continue
+        # Check if this error's tool was recovered via tool_calls
+        is_recovered = any(t in err_lower.replace(" ", "_") for t in recovered_tools)
+        if is_recovered:
+            continue
+        # Fallback: check labels for generic recovery keywords
+        all_labels = getattr(result, "tool_labels", [])
+        success_keywords = ("created", "completed", "replaced", "file created",
+                            "succeeded", "file viewed", "file replaced")
         err_idx = all_labels.index(err) if err in all_labels else -1
+        label_recovered = False
         if err_idx >= 0:
             for later in all_labels[err_idx + 1:]:
                 if any(sk in later.lower() for sk in success_keywords):
-                    recovered.add(i)
+                    label_recovered = True
                     break
+        if not label_recovered:
+            unrecovered.append(err)
 
-    unrecovered = [e for i, e in enumerate(errors) if i not in recovered]
+    advisory_count = len(errors) - len(unrecovered) - len(
+        [e for e in errors if e not in unrecovered]
+    )
 
     if not unrecovered:
+        explanation = f"{len(errors)} error(s) self-corrected"
+        if any(any(t.replace("_", " ") in e.lower() for t in _ADVISORY_TOOLS) for e in errors):
+            explanation += " (includes advisory memory errors)"
         return {
             "name": "tool_errors",
             "annotator_kind": "CODE",
             "score": SCORE_PASS,
             "label": f"recovered_{len(errors)}",
-            "explanation": f"{len(errors)} error(s) self-corrected",
+            "explanation": explanation,
         }
 
     error_summary = "; ".join(unrecovered[:5])

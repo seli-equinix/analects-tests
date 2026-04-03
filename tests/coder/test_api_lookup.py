@@ -61,17 +61,17 @@ class TestAPILookup:
             f"Response: {r1.content[:200]}"
         )
 
-        # Should have used search_api_docs (not just web_search or bash)
+        # Should have used search_docs (unified tool, formerly search_api_docs)
         tool_names_1 = r1.tool_names
         trace_test.set_attribute("cca.test.t1_tools", str(tool_names_1))
         used_api_search = any(
-            "search_api_docs" in name for name in tool_names_1
+            "search_docs" in name for name in tool_names_1
         )
         trace_test.set_attribute(
             "cca.test.t1_used_api_search", used_api_search,
         )
         assert used_api_search, (
-            f"Agent didn't use search_api_docs tool. "
+            f"Agent didn't use search_docs tool. "
             f"Called: {tool_names_1}"
         )
 
@@ -172,7 +172,7 @@ class TestAPILookup:
         trace_test.set_attribute("cca.test.t3_tools", str(tool_names_3))
         used_api_tools = any(
             t in name for name in tool_names_3
-            for t in ["search_api_docs", "get_api_docs"]
+            for t in ["search_docs", "get_api_docs"]
         )
         trace_test.set_attribute(
             "cca.test.t3_used_api_tools", used_api_tools,
