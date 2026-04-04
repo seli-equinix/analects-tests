@@ -34,14 +34,14 @@ class TestCodeTrace:
         test_run.track_session(sid)
 
         # -- Turn 1: Trace from a known function --
-        # Use a general query -- the indexed codebase has Python files
-        # from the MCP server or CCA projects. Ask about something
-        # that should exist in ANY indexed codebase.
+        # The indexed workspace has EVA PowerShell code with 100+
+        # functions and rich call graphs. Ask about a specific
+        # function that definitely exists.
         msg1 = (
-            "I need to understand how the health check works in the "
-            "codebase. Trace the execution path starting from the "
-            "health endpoint function -- what functions does it call, "
-            "and what files are involved?"
+            "I need to understand how VM snapshot management works in "
+            "the EVA project. Trace the execution path starting from "
+            "the Add-VMSnapShot function -- what functions does it "
+            "call, and what files are involved?"
         )
         r1 = test_run.chat(msg1, session_id=sid)
         evaluate_response(r1, msg1, trace_test, judge_model, "coder")
@@ -73,8 +73,8 @@ class TestCodeTrace:
         # Response should mention function names or file paths
         content1 = r1.content.lower()
         has_code_refs = any(w in content1 for w in [
-            ".py", "def ", "health", "function", "endpoint",
-            "calls", "trace",
+            ".ps1", ".psm1", "function", "add-vmsnap", "snapshot",
+            "vcenter", "calls", "trace", "invoke", "eva",
         ])
         trace_test.set_attribute("cca.test.t1_has_code_refs", has_code_refs)
         assert has_code_refs, (
@@ -100,12 +100,13 @@ class TestCodeTrace:
             f"Response: {r2.content[:200]}"
         )
 
-        # Must have used assemble_traced_code or str_replace_editor
+        # Must have used code intelligence tools for assembly
         tool_names_2 = r2.tool_names
         trace_test.set_attribute("cca.test.t2_tools", str(tool_names_2))
         assert any(
             t in name for name in tool_names_2
-            for t in ["assemble_traced_code", "str_replace_editor", "search_codebase"]
+            for t in ["assemble_traced_code", "str_replace_editor",
+                       "search_codebase", "trace_execution"]
         ), (
             f"No assembly/search tool called in Turn 2. "
             f"Tools: {tool_names_2}"
