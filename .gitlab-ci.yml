@@ -327,17 +327,17 @@ test-project-scoped-notes:
   rules:
     - if: '$RUN_TEST == "project-scoped-notes"'
 
-test-infra-inspection:
+test-infra-inspection-flow:
   extends: .test-base
   variables:
-    PHOENIX_PROJECT_NAME: "infra-inspection"
+    PHOENIX_PROJECT_NAME: "infra-inspection-flow"
   script:
-    - python -m pytest tests/integration/test_infra_inspection_flow.py -v --tb=short --with-judge --junitxml=report-infra-inspection.xml
+    - python -m pytest tests/integration/test_infra_inspection_flow.py -v --tb=short --with-judge --junitxml=report-infra-inspection-flow.xml
   environment:
-    name: test/integration/infra-inspection
+    name: test/integration/infra-inspection-flow
     deployment_tier: testing
   rules:
-    - if: '$RUN_TEST == "infra-inspection"'
+    - if: '$RUN_TEST == "infra-inspection-flow"'
 
 test-knowledge-pipeline:
   extends: .test-base
@@ -386,6 +386,118 @@ test-tool-isolation:
     deployment_tier: testing
   rules:
     - if: '$RUN_TEST == "tool-isolation"'
+
+# ── Knowledge Tests ──────────────────────────
+
+test-api-sdk-docs:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "api-sdk-docs"
+  script:
+    - python -m pytest tests/knowledge/test_api_sdk_docs.py -v --tb=short --junitxml=report-api-sdk-docs.xml
+  environment:
+    name: test/knowledge/api-sdk-docs
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "api-sdk-docs"'
+
+test-bash-docs:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "bash-docs"
+  script:
+    - python -m pytest tests/knowledge/test_bash_docs.py -v --tb=short --junitxml=report-bash-docs.xml
+  environment:
+    name: test/knowledge/bash-docs
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "bash-docs"'
+
+test-nutanix-sdk:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "nutanix-sdk"
+  script:
+    - python -m pytest tests/knowledge/test_nutanix_sdk.py -v --tb=short --junitxml=report-nutanix-sdk.xml
+  environment:
+    name: test/knowledge/nutanix-sdk
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "nutanix-sdk"'
+
+test-powershell-docs:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "powershell-docs"
+  script:
+    - python -m pytest tests/knowledge/test_powershell_docs.py -v --tb=short --junitxml=report-powershell-docs.xml
+  environment:
+    name: test/knowledge/powershell-docs
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "powershell-docs"'
+
+test-python-docs:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "python-docs"
+  script:
+    - python -m pytest tests/knowledge/test_python_docs.py -v --tb=short --junitxml=report-python-docs.xml
+  environment:
+    name: test/knowledge/python-docs
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "python-docs"'
+
+test-multi-language:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "multi-language"
+  script:
+    - python -m pytest tests/knowledge/test_multi_language.py -v --tb=short --with-judge --junitxml=report-multi-language.xml
+  environment:
+    name: test/knowledge/multi-language
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "multi-language"'
+
+# ── Additional Integration/Coder Tests ──────
+
+test-5-retrieval-modes:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "5-retrieval-modes"
+  script:
+    - python -m pytest tests/integration/test_5_retrieval_modes.py -v --tb=short --with-judge --junitxml=report-5-retrieval-modes.xml
+  environment:
+    name: test/integration/5-retrieval-modes
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "5-retrieval-modes"'
+
+test-negative-cases:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "negative-cases"
+  script:
+    - python -m pytest tests/integration/test_negative_cases.py -v --tb=short --with-judge --junitxml=report-negative-cases.xml
+  environment:
+    name: test/integration/negative-cases
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "negative-cases"'
+
+test-browse-project:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "browse-project"
+  script:
+    - python -m pytest tests/coder/test_browse_project.py -v --tb=short --with-judge --junitxml=report-browse-project.xml
+  environment:
+    name: test/coder/browse-project
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "browse-project"'
 
 # ════════════════════════════════════════════
 #  PAGES — deploy CCA test dashboard
