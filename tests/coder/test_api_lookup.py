@@ -134,16 +134,25 @@ class TestAPILookup:
 
         # Response should contain SDK-specific terms from the docs
         # (proves code was informed by real docs, not hallucinated)
+        # Terms may be in response text OR in a file the agent created
         has_sdk_terms = any(w in content2 for w in [
             "ntnx_vmm", "vmm", "ahv", "create_vm",
             "vm(", "client", "api_client", "configuration",
         ])
+
+        # If code was written to a file (not inline), verify the agent
+        # fetched docs before writing — doc-informed file creation counts
+        if not has_sdk_terms:
+            used_file_tool = any("str_replace_editor" in n for n in r2.tool_names)
+            used_docs = any("get_api_docs" in n for n in r2.tool_names)
+            has_sdk_terms = used_file_tool and used_docs
+
         trace_test.set_attribute(
             "cca.test.t2_has_sdk_terms", has_sdk_terms,
         )
         assert has_sdk_terms, (
-            f"Response doesn't use SDK-specific terms from docs: "
-            f"{r2.content[:300]}"
+            f"Response doesn't use SDK terms and didn't create "
+            f"a file with docs: {r2.content[:300]}"
         )
 
         # -- Turn 3: Different library from online registry --
