@@ -40,6 +40,7 @@ def generate_test_report(
     turn_details: Optional[List[Dict[str, Any]]] = None,
     backend_issues: Optional[Dict] = None,
     failure_reason: Optional[str] = None,
+    ci_job_name: str = "",
 ) -> Optional[Path]:
     """Generate a .md report for a single test.
 
@@ -71,6 +72,7 @@ def generate_test_report(
         duration_ms = metrics.get("execution_time_ms", 0)
         meta = {
             "test_name": test_name,
+            "ci_job_name": ci_job_name,
             "status": status,
             "pipeline_id": PIPELINE_ID,
             "timestamp": timestamp,

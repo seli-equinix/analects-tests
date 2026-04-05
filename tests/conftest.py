@@ -307,6 +307,7 @@ def trace_test(request, phoenix_tracer):
                 evals_per_turn=metrics.get("_evals"),
                 turn_details=metrics.get("_turn_details"),
                 failure_reason=failure_reason,
+                ci_job_name=_ci_job,
             )
 
             # Capture CCA debug logs into the test's folder
