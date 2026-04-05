@@ -109,6 +109,37 @@ def phoenix_tracer(phoenix_provider):
     return phoenix_provider, tracer
 
 
+def _post_test_result(cca_url: str, headers: dict, ci_job: str,
+                      pipeline_id: str, node_id: str, status: str,
+                      metrics: dict, failure_reason: str):
+    """Post individual test result to CCA DB. Fire-and-forget.
+
+    Called in CI mode only (when CI_PIPELINE_ID and RUN_TEST are set).
+    The /admin/test-result endpoint upserts the result and recomputes
+    TestDefinition aggregate status (FAILED if ANY individual test failed).
+    """
+    try:
+        import httpx as _httpx
+        _httpx.post(
+            f"{cca_url}/admin/test-result",
+            json={
+                "ci_job_name": ci_job,
+                "pipeline_id": pipeline_id,
+                "node_id": node_id,
+                "status": status,
+                "duration_ms": metrics.get("execution_time_ms", 0),
+                "route": metrics.get("route", ""),
+                "failure_reason": (failure_reason or "")[:500],
+                "tool_iterations": metrics.get("tool_iterations", 0),
+                "turns": len(metrics.get("_turns", [])),
+            },
+            headers=headers,
+            timeout=10,
+        )
+    except Exception as e:
+        log.warning("Failed to post test result: %s", e)
+
+
 @pytest.fixture(autouse=True)
 def trace_test(request, phoenix_tracer):
     """Wrap every test in a Phoenix span with test metadata.
@@ -246,6 +277,27 @@ def trace_test(request, phoenix_tracer):
                 if request.node.rep_call.failed:
                     # Capture the actual assertion error / traceback
                     failure_reason = str(request.node.rep_call.longrepr)[:2000]
+
+            # Post individual test result to DB (CI mode only)
+            _pipeline_id = os.environ.get("CI_PIPELINE_ID", "")
+            _ci_job = os.environ.get("RUN_TEST", "")
+            if _pipeline_id and _ci_job:
+                _api_key = os.environ.get("CCA_TEST_API_KEY", "")
+                _auth_h = (
+                    {"Authorization": f"Bearer {_api_key}"} if _api_key else {}
+                )
+                _post_test_result(
+                    cca_url=os.environ.get(
+                        "CCA_BASE_URL", "http://192.168.4.205:8500"
+                    ),
+                    headers=_auth_h,
+                    ci_job=_ci_job,
+                    pipeline_id=_pipeline_id,
+                    node_id=span_name.replace("::", "-"),
+                    status=outcome_str,
+                    metrics=metrics,
+                    failure_reason=failure_reason,
+                )
 
             test_dir = generate_test_report(
                 test_name=span_name.replace("::", "-"),

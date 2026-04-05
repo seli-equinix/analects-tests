@@ -60,17 +60,26 @@ variables:
       CCA_URL="${CCA_BASE_URL:-http://192.168.4.205:8500}"
       AUTH=""
       [ -n "$CCA_TEST_API_KEY" ] && AUTH="-H \"Authorization: Bearer $CCA_TEST_API_KEY\""
+      # Upload individual report folders with unique names (no overwrite)
       for dir in reports/*/; do
         if [ -d "$dir" ]; then
-          ARGS="-F pipeline_id=$CI_PIPELINE_ID -F test_name=$RUN_TEST"
+          FOLDER_NAME=$(basename "$dir")
+          ARGS="-F pipeline_id=$CI_PIPELINE_ID -F test_name=$FOLDER_NAME"
           [ -f "${dir}report.md" ] && ARGS="$ARGS -F report=@${dir}report.md"
           [ -f "${dir}metadata.json" ] && ARGS="$ARGS -F metadata=@${dir}metadata.json"
           [ -f "${dir}tool_calls.json" ] && ARGS="$ARGS -F tool_calls=@${dir}tool_calls.json"
           [ -f "${dir}cca_debug.log" ] && ARGS="$ARGS -F debug_log=@${dir}cca_debug.log"
           [ -f "${dir}manifest.json" ] && ARGS="$ARGS -F manifest=@${dir}manifest.json"
-          eval curl -sf -X POST "$CCA_URL/admin/upload-report" $AUTH $ARGS || echo "WARN: report upload failed for $dir"
+          eval curl -sf -X POST "$CCA_URL/admin/upload-report" $AUTH $ARGS || echo "WARN: upload failed for $dir"
         fi
       done
+      # Upload JUnit XML aggregate (pytest summary with pass/fail counts)
+      JUNIT_FILE="report-${RUN_TEST}.xml"
+      if [ -f "$JUNIT_FILE" ]; then
+        eval curl -sf -X POST "$CCA_URL/admin/upload-report" $AUTH \
+          -F pipeline_id=$CI_PIPELINE_ID -F test_name=$RUN_TEST \
+          -F junit=@${JUNIT_FILE} || echo "WARN: JUnit upload failed"
+      fi
   allow_failure: true
 
 # ════════════════════════════════════════════
