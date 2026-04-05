@@ -241,8 +241,10 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
 
     Uses tool_calls metadata ({name, success, iteration} dicts) for robust
     recovery detection: if the same tool name succeeds after failing, the
-    error is recovered. Memory tool failures (write_memory, read_memory) are
-    always advisory — they're internal bookkeeping, not task completion.
+    error is recovered (genuine self-correction).
+
+    ALL tool failures are treated equally — no blanket exemptions.
+    If a tool fails and is never recovered, the test fails.
     """
     errors = getattr(result, "tool_errors", [])
     if not errors:
@@ -254,7 +256,7 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
             "explanation": "No tool errors",
         }
 
-    # ── Tool-type-aware recovery via structured tool_calls ──
+    # ── Recovery detection via structured tool_calls ──
     # If tool X fails at iteration N but succeeds at iteration M > N,
     # the error is considered self-corrected.
     tool_calls = result.metadata.get("tool_calls") or []
@@ -271,21 +273,10 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
         elif name in failed_tools and iteration > failed_tools[name]:
             recovered_tools.add(name)
 
-    # ── Memory tools are ADVISORY (never gating) ──
-    # write_memory and read_memory failures are internal bookkeeping —
-    # a failed memory save doesn't mean the task failed.
-    _ADVISORY_TOOLS = {"write_memory", "read_memory", "edit_memory",
-                       "refine_summary", "list_memory", "clear_memory",
-                       "search_memory"}
-
-    # Count unrecovered errors (excluding advisory tools)
+    # Count unrecovered errors — ALL tools treated equally
     unrecovered = []
     for err in errors:
         err_lower = err.lower()
-        # Check if any advisory tool name appears in this error label
-        is_advisory = any(t.replace("_", " ") in err_lower for t in _ADVISORY_TOOLS)
-        if is_advisory:
-            continue
         # Check if this error's tool was recovered via tool_calls
         is_recovered = any(t in err_lower.replace(" ", "_") for t in recovered_tools)
         if is_recovered:
@@ -304,14 +295,7 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
         if not label_recovered:
             unrecovered.append(err)
 
-    advisory_count = len(errors) - len(unrecovered) - len(
-        [e for e in errors if e not in unrecovered]
-    )
-
     if not unrecovered:
-        explanation = f"{len(errors)} error(s) self-corrected"
-        if any(any(t.replace("_", " ") in e.lower() for t in _ADVISORY_TOOLS) for e in errors):
-            explanation += " (includes advisory memory errors)"
         return {
             "name": "tool_errors",
             "annotator_kind": "CODE",
