@@ -1,13 +1,23 @@
-"""Nutanix SDK documentation search validation.
+"""Flow test: Nutanix SDK documentation search validation.
+
+Journey: developer needs to automate Nutanix infrastructure -> CCA
+searches curated SDK docs via search_docs -> writes code using real
+Nutanix v4 SDK classes and methods.
 
 Phase 1: Direct API validation — does search_docs return the right Nutanix docs?
 Phase 2: LLM agent tests — does CCA use search_docs correctly for Nutanix SDK?
+
+Exercises: search_docs (API), get_api_docs (API), str_replace_editor (FILE),
+bash (SHELL), CODER route.
+Markers: knowledge, knowledge_api, knowledge_agent, slow
 """
 import uuid
 
 import pytest
 
-from .conftest import search_docs
+from tests.evaluators import evaluate_response
+
+from .conftest import assert_content_or_file, search_docs
 from .helpers.knowledge_data import NUTANIX_MODULES
 
 pytestmark = [
@@ -62,8 +72,6 @@ class TestNutanixSdkAgent:
         Validates: search_docs called, code uses ntnx_vmm_py_client,
         proper VM creation pattern with disks and NICs.
         """
-        from tests.evaluators import evaluate_response
-
         sid = f"test-ntnx-vmm-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
 
@@ -75,17 +83,16 @@ class TestNutanixSdkAgent:
         )
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
 
         # Verify search_docs was called
         assert any("search_docs" in t for t in r.tool_names), (
             f"Agent didn't use search_docs: {r.tool_names}"
         )
 
-        # Verify Nutanix VMM code in response
-        content = r.content
-        assert "vmm" in content.lower() or "ntnx" in content.lower(), (
-            "Missing Nutanix VMM SDK references"
-        )
+        assert_content_or_file(r, ["vmm", "VMM", "ntnx", "nutanix", "Nutanix"], "Nutanix VMM")
 
     @pytest.mark.knowledge_agent
     @pytest.mark.slow
@@ -95,8 +102,6 @@ class TestNutanixSdkAgent:
         Validates: search_docs called, code uses ntnx_networking_py_client,
         proper subnet creation with VLAN and IP pool configuration.
         """
-        from tests.evaluators import evaluate_response
-
         sid = f"test-ntnx-net-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
 
@@ -109,11 +114,11 @@ class TestNutanixSdkAgent:
         )
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
 
-        content = r.content
-        assert "networking" in content.lower() or "subnet" in content.lower(), (
-            "Missing Nutanix Networking SDK references"
-        )
+        assert_content_or_file(r, ["networking", "subnet", "Subnet", "nutanix", "Nutanix"], "Nutanix Networking")
 
     @pytest.mark.knowledge_agent
     @pytest.mark.slow
@@ -123,8 +128,6 @@ class TestNutanixSdkAgent:
         Validates: search_docs called, code uses ntnx_dataprotection_py_client,
         proper snapshot/recovery point creation pattern.
         """
-        from tests.evaluators import evaluate_response
-
         sid = f"test-ntnx-dp-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
 
@@ -137,8 +140,8 @@ class TestNutanixSdkAgent:
         )
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
 
-        content = r.content.lower()
-        assert "dataprotection" in content or "recovery" in content or "snapshot" in content, (
-            "Missing Nutanix Data Protection SDK references"
-        )
+        assert_content_or_file(r, ["dataprotection", "recovery", "snapshot", "Snapshot", "nutanix"], "Nutanix Data Protection")

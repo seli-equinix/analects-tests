@@ -301,7 +301,7 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
             "annotator_kind": "CODE",
             "score": SCORE_PASS,
             "label": f"recovered_{len(errors)}",
-            "explanation": explanation,
+            "explanation": f"All {len(errors)} tool error(s) recovered via self-correction",
         }
 
     error_summary = "; ".join(unrecovered[:5])

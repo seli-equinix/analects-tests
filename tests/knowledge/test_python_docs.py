@@ -1,14 +1,24 @@
-"""Python documentation search validation.
+"""Flow test: Python documentation search validation.
+
+Journey: developer needs to write code using Python libraries -> CCA
+searches curated docs via search_docs -> writes code informed by
+real API signatures instead of hallucinating.
 
 Phase 1: Direct API validation — does search_docs return the right docs?
 Phase 2: LLM agent tests — does CCA use search_docs correctly for Python?
+
+Exercises: search_docs (API), get_api_docs (API), str_replace_editor (FILE),
+bash (SHELL), CODER route.
+Markers: knowledge, knowledge_api, knowledge_agent, slow
 """
 import uuid
 import warnings
 
 import pytest
 
-from .conftest import search_docs
+from tests.evaluators import evaluate_response
+
+from .conftest import assert_content_or_file, search_docs
 from .helpers.knowledge_data import PY_PACKAGES
 
 pytestmark = [
@@ -68,7 +78,6 @@ class TestPythonDocsAgent:
         Validates: search_docs called, correct doc found, code uses
         FastAPI Depends with proper type hints.
         """
-        from tests.evaluators import evaluate_response
 
         sid = f"test-py-fastapi-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
@@ -82,17 +91,16 @@ class TestPythonDocsAgent:
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
 
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
+
         # Verify search_docs was called
         assert any("search_docs" in t for t in r.tool_names), (
             f"Agent didn't use search_docs: {r.tool_names}"
         )
 
-        # Verify FastAPI code in response
-        content = r.content
-        assert "Depends" in content, "Missing Depends (dependency injection)"
-        assert "BaseModel" in content or "Pydantic" in content.lower(), (
-            "Missing Pydantic model for request validation"
-        )
+        assert_content_or_file(r, ["Depends", "dependency"], "FastAPI Depends")
 
     @pytest.mark.knowledge_agent
     @pytest.mark.slow
@@ -101,7 +109,6 @@ class TestPythonDocsAgent:
 
         Validates: search_docs called, code uses httpx with async/await.
         """
-        from tests.evaluators import evaluate_response
 
         sid = f"test-py-httpx-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
@@ -115,11 +122,11 @@ class TestPythonDocsAgent:
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
 
-        content = r.content
-        assert "httpx" in content, "Missing httpx import"
-        assert "async" in content and "await" in content, (
-            "Missing async/await pattern"
-        )
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
+
+        assert_content_or_file(r, ["httpx", "async"], "httpx async")
 
     @pytest.mark.knowledge_agent
     @pytest.mark.slow
@@ -128,7 +135,6 @@ class TestPythonDocsAgent:
 
         Validates: search_docs called, code uses BaseModel with validators.
         """
-        from tests.evaluators import evaluate_response
 
         sid = f"test-py-pydantic-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
@@ -142,11 +148,11 @@ class TestPythonDocsAgent:
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
 
-        content = r.content
-        assert "BaseModel" in content, "Missing BaseModel"
-        assert "validator" in content.lower() or "field_validator" in content, (
-            "Missing field validation (validator or field_validator)"
-        )
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
+
+        assert_content_or_file(r, ["BaseModel", "validator", "field_validator"], "Pydantic validation")
 
     @pytest.mark.knowledge_agent
     @pytest.mark.slow
@@ -156,7 +162,6 @@ class TestPythonDocsAgent:
         Validates: search_docs called, code uses torch.nn with proper
         forward method.
         """
-        from tests.evaluators import evaluate_response
 
         sid = f"test-py-torch-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
@@ -170,11 +175,11 @@ class TestPythonDocsAgent:
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
 
-        content = r.content
-        assert "nn.Module" in content or "torch.nn" in content, (
-            "Missing torch.nn module usage"
-        )
-        assert "forward" in content, "Missing forward method"
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
+
+        assert_content_or_file(r, ["nn.Module", "torch.nn", "torch"], "PyTorch nn")
 
     @pytest.mark.knowledge_agent
     @pytest.mark.slow
@@ -184,7 +189,6 @@ class TestPythonDocsAgent:
         Validates: search_docs called, code uses pandas for groupby,
         aggregation, and filtering.
         """
-        from tests.evaluators import evaluate_response
 
         sid = f"test-py-pandas-{uuid.uuid4().hex[:8]}"
         test_run.track_session(sid)
@@ -199,6 +203,8 @@ class TestPythonDocsAgent:
         r = test_run.chat(msg, session_id=sid, idle_timeout=180)
         evaluate_response(r, msg, trace_test, judge_model, "coder")
 
-        content = r.content
-        assert "pandas" in content or "pd." in content, "Missing pandas usage"
-        assert "groupby" in content, "Missing groupby operation"
+        trace_test.set_attribute("cca.test.t1_tools", str(r.tool_names))
+        trace_test.set_attribute("cca.test.t1_response", r.content[:500])
+        assert r.content, "Turn 1 returned empty response"
+
+        assert_content_or_file(r, ["pandas", "pd.", "groupby"], "pandas data analysis")

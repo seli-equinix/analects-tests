@@ -264,9 +264,15 @@ def trace_test(request, phoenix_tracer):
                     cca_url = os.environ.get(
                         "CCA_BASE_URL", "http://192.168.4.205:8500"
                     )
+                    # Auth required (CCA_API_AUTH=1) — use same key as test client
+                    api_key = os.environ.get("CCA_TEST_API_KEY", "")
+                    _auth_headers = (
+                        {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                    )
                     resp = _httpx.get(
                         f"{cca_url}/admin/debug-logs?tail=5000",
                         timeout=15,
+                        headers=_auth_headers,
                     )
                     if resp.status_code == 200:
                         data = resp.json()
@@ -279,12 +285,21 @@ def trace_test(request, phoenix_tracer):
                                 "Captured %d debug log lines for %s",
                                 data.get("line_count", 0), span_name,
                             )
+                    else:
+                        log.warning(
+                            "debug-logs returned %d for %s",
+                            resp.status_code, span_name,
+                        )
                 except Exception as e:
                     log.warning("Failed to capture CCA debug logs: %s", e)
 
                 # Clear CCA logs so next test starts clean
                 try:
-                    _httpx.post(f"{cca_url}/admin/clear-logs", timeout=10)
+                    _httpx.post(
+                        f"{cca_url}/admin/clear-logs",
+                        timeout=10,
+                        headers=_auth_headers,
+                    )
                 except Exception:
                     pass  # Best effort
 
