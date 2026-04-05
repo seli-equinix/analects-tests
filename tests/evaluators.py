@@ -274,8 +274,9 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
     # ── Memory tools are ADVISORY (never gating) ──
     # write_memory and read_memory failures are internal bookkeeping —
     # a failed memory save doesn't mean the task failed.
-    _ADVISORY_TOOLS = {"write_memory", "read_memory", "refine_summary",
-                       "list_memory", "clear_memory", "search_memory"}
+    _ADVISORY_TOOLS = {"write_memory", "read_memory", "edit_memory",
+                       "refine_summary", "list_memory", "clear_memory",
+                       "search_memory"}
 
     # Count unrecovered errors (excluding advisory tools)
     unrecovered = []
