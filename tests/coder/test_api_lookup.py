@@ -5,7 +5,7 @@ searches curated API docs -> fetches full documentation -> writes
 code informed by real function signatures instead of hallucinating.
 
 Exercises the API lookup pipeline:
-  search_api_docs (index search) -> get_api_docs (chub get) ->
+  search_docs (primary) -> get_api_docs (backup for deep dives) ->
   code generation informed by real API signatures.
 
 Exercises: search_api_docs, get_api_docs (API), str_replace_editor (FILE),
@@ -108,19 +108,12 @@ class TestAPILookup:
             f"Response: {r2.content[:200]}"
         )
 
-        # Should have used get_api_docs to fetch the actual docs
+        # Track tools used (for Phoenix debugging)
+        # get_api_docs is optional in Turn 2 — agent may reuse docs from Turn 1
         tool_names_2 = r2.tool_names
         trace_test.set_attribute("cca.test.t2_tools", str(tool_names_2))
-        used_get_docs = any(
-            "get_api_docs" in name for name in tool_names_2
-        )
-        trace_test.set_attribute(
-            "cca.test.t2_used_get_docs", used_get_docs,
-        )
-        assert used_get_docs, (
-            f"Agent didn't use get_api_docs tool. "
-            f"Called: {tool_names_2}"
-        )
+        used_get_docs = any("get_api_docs" in name for name in tool_names_2)
+        trace_test.set_attribute("cca.test.t2_used_get_docs", used_get_docs)
 
         # Response should contain actual code
         content2 = r2.content.lower()
@@ -144,7 +137,11 @@ class TestAPILookup:
         # fetched docs before writing — doc-informed file creation counts
         if not has_sdk_terms:
             used_file_tool = any("str_replace_editor" in n for n in r2.tool_names)
-            used_docs = any("get_api_docs" in n for n in r2.tool_names)
+            # Accept doc tools from Turn 1 or Turn 2
+            used_docs = any(
+                t in name for name in (r1.tool_names + r2.tool_names)
+                for t in ["search_docs", "get_api_docs"]
+            )
             has_sdk_terms = used_file_tool and used_docs
 
         trace_test.set_attribute(
