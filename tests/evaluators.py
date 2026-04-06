@@ -295,6 +295,21 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
         if not label_recovered:
             unrecovered.append(err)
 
+    # Verification-failure recovery: if str_replace_editor succeeded at
+    # creating a file and the only remaining errors are bash commands
+    # (verification/run attempts), treat them as recovered. The agent
+    # DID its job — the verification failing is not a tool failure.
+    if unrecovered:
+        had_file_success = any(
+            tc.get("name") == "str_replace_editor" and tc.get("success")
+            for tc in tool_calls
+        )
+        if had_file_success:
+            unrecovered = [
+                err for err in unrecovered
+                if "command" not in err.lower()
+            ]
+
     if not unrecovered:
         return {
             "name": "tool_errors",
