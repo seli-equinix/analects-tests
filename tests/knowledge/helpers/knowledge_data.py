@@ -143,7 +143,7 @@ PY_PACKAGES = {
     "mgmt-signalr": "azure/mgmt-signalr",
     "mgmt-trafficmanager": "azure/mgmt-trafficmanager",
     "mgmt-web": "azure/mgmt-web",
-    "search-documents": "azure/search-documents",
+    "azure-search-documents": "azure/search-documents",
     "storage-file-datalake": "azure/storage-file-datalake",
     "trading": "binance/trading",
     "gateway": "braintree/gateway",
