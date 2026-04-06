@@ -64,7 +64,9 @@ variables:
       for dir in reports/*/; do
         if [ -d "$dir" ]; then
           FOLDER_NAME=$(basename "$dir")
-          ARGS="-F pipeline_id=$CI_PIPELINE_ID -F test_name=$FOLDER_NAME"
+          # Strip P{pipeline_id}_ prefix if already present (report_generator adds it)
+          UPLOAD_NAME="${FOLDER_NAME#P${CI_PIPELINE_ID}_}"
+          ARGS="-F pipeline_id=$CI_PIPELINE_ID -F test_name=$UPLOAD_NAME"
           [ -f "${dir}report.md" ] && ARGS="$ARGS -F report=@${dir}report.md"
           [ -f "${dir}metadata.json" ] && ARGS="$ARGS -F metadata=@${dir}metadata.json"
           [ -f "${dir}tool_calls.json" ] && ARGS="$ARGS -F tool_calls=@${dir}tool_calls.json"
