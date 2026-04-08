@@ -34,10 +34,33 @@ def knowledge_client():
 
 
 def search_docs(client: httpx.Client, query: str) -> dict:
-    """Call search_docs via the admin API (same handler as the LLM)."""
+    """Call search_docs via the admin API (same handler as the LLM).
+
+    The API has two response formats:
+    1. Exact match: {"documentation", "source", "confidence"} — single result
+    2. Search results: {"results": [{id, language, snippet}]} — array
+
+    This helper normalizes both to the results array format for test assertions.
+    """
     resp = client.post("/admin/knowledge/search", json={"query": query})
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+
+    # Normalize exact-match format to results array format
+    if "results" not in data and "source" in data:
+        source = data.get("source", "")
+        lang = ""
+        if "/pwsh-" in source:
+            lang = "powershell"
+        elif source.startswith("vmware/"):
+            lang = "powershell"
+        data["results"] = [{
+            "id": source,
+            "snippet": data.get("documentation", ""),
+            "language": lang,
+        }]
+
+    return data
 
 
 def assert_content_or_file(r, terms: list[str], what: str):
