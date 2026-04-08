@@ -132,7 +132,9 @@ class TestReturningUserMemory:
             "Important: we run a 5-node Docker Swarm cluster, our "
             "registry is at registry.acme.internal, and we deploy via "
             "Portainer with GitOps. "
-            "Write me a docker-compose.yml for a Redis cache."
+            "Show me a docker-compose.yml example for a Redis cache "
+            "with a health check — just show me the YAML, "
+            "don't create any files."
         )
         r5 = test_run.chat(msg5, session_id=sid5, user_id=user_id)
         evaluate_response(r5, msg5, trace_test, judge_model, "user")
