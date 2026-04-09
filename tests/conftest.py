@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 # ==================== Configuration ====================
 
 PHOENIX_ENDPOINT = os.getenv("PHOENIX_COLLECTOR_ENDPOINT", "http://192.168.4.204:4317")
-CCA_BASE_URL = os.getenv("CCA_BASE_URL", "http://192.168.4.205:8500")
+CCA_BASE_URL = os.getenv("CCA_BASE_URL", "https://192.168.4.205:8500")
 
 # Same Phoenix project as the CCA server — test + server spans unified
 PROJECT_NAME = os.getenv("PHOENIX_PROJECT_NAME", "cca-http")
@@ -288,7 +288,7 @@ def trace_test(request, phoenix_tracer):
                 )
                 _post_test_result(
                     cca_url=os.environ.get(
-                        "CCA_BASE_URL", "http://192.168.4.205:8500"
+                        "CCA_BASE_URL", "https://192.168.4.205:8500"
                     ),
                     headers=_auth_h,
                     ci_job=_ci_job,
@@ -315,7 +315,7 @@ def trace_test(request, phoenix_tracer):
                 try:
                     import httpx as _httpx
                     cca_url = os.environ.get(
-                        "CCA_BASE_URL", "http://192.168.4.205:8500"
+                        "CCA_BASE_URL", "https://192.168.4.205:8500"
                     )
                     # Auth required (CCA_API_AUTH=1) — use same key as test client
                     api_key = os.environ.get("CCA_TEST_API_KEY", "")

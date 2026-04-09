@@ -57,7 +57,7 @@ variables:
     # Upload reports to CCA server for local storage on Spark1
     # Uses CCA_TEST_API_KEY for auth (CCA_API_AUTH=1 requires Bearer token)
     - |
-      CCA_URL="${CCA_BASE_URL:-http://192.168.4.205:8500}"
+      CCA_URL="${CCA_BASE_URL:-https://192.168.4.205:8500}"
       AUTH=""
       [ -n "$CCA_TEST_API_KEY" ] && AUTH="-H \"Authorization: Bearer $CCA_TEST_API_KEY\""
       # Upload individual report folders with unique names (no overwrite)
