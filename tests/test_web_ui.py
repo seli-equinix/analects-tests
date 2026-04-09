@@ -33,7 +33,7 @@ import httpx
 DEFAULT_BASE = "https://192.168.4.205:8443"
 DEFAULT_USER = "admin"
 DEFAULT_PASS = "Loveme-sex64"
-CCA_API = "http://192.168.4.205:8500"
+CCA_API = "https://192.168.4.205:8500"
 
 
 # ── Result tracking ──────────────────────────────────────────────────

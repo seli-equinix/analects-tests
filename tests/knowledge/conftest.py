@@ -8,7 +8,7 @@ import os
 import httpx
 import pytest
 
-CCA_URL = os.environ.get("CCA_BASE_URL", "http://192.168.4.205:8500")
+CCA_URL = os.environ.get("CCA_BASE_URL", "https://192.168.4.205:8500")
 
 
 @pytest.fixture(scope="session")

@@ -119,7 +119,7 @@ class CCAClient:
 
     def __init__(
         self,
-        base_url: str = os.getenv("CCA_BASE_URL", "http://192.168.4.205:8500"),
+        base_url: str = os.getenv("CCA_BASE_URL", "https://192.168.4.205:8500"),
         tracer: Optional[trace.Tracer] = None,
         idle_timeout: float = TIMEOUT_IDLE,
         project_name: Optional[str] = None,
@@ -186,7 +186,7 @@ class CCAClient:
         # vLLM notetaker (Spark1:8400)
         try:
             resp = self._client.get(
-                "http://192.168.4.205:8400/health", timeout=5,
+                "https://192.168.4.205:8400/health", timeout=5,
             )
             if resp.status_code != 200:
                 issues["vllm_notetaker"] = f"HTTP {resp.status_code}"
