@@ -72,13 +72,13 @@ variables:
           [ -f "${dir}tool_calls.json" ] && ARGS="$ARGS -F tool_calls=@${dir}tool_calls.json"
           [ -f "${dir}cca_debug.log" ] && ARGS="$ARGS -F debug_log=@${dir}cca_debug.log"
           [ -f "${dir}manifest.json" ] && ARGS="$ARGS -F manifest=@${dir}manifest.json"
-          eval curl -sf -X POST "$CCA_URL/admin/upload-report" $AUTH $ARGS || echo "WARN: upload failed for $dir"
+          eval curl -4sf -X POST "$CCA_URL/admin/upload-report" $AUTH $ARGS || echo "WARN: upload failed for $dir"
         fi
       done
       # Upload JUnit XML aggregate (pytest summary with pass/fail counts)
       JUNIT_FILE="report-${RUN_TEST}.xml"
       if [ -f "$JUNIT_FILE" ]; then
-        eval curl -sf -X POST "$CCA_URL/admin/upload-report" $AUTH \
+        eval curl -4sf -X POST "$CCA_URL/admin/upload-report" $AUTH \
           -F pipeline_id=$CI_PIPELINE_ID -F test_name=$RUN_TEST \
           -F junit=@${JUNIT_FILE} || echo "WARN: JUnit upload failed"
       fi
@@ -109,11 +109,11 @@ health-check:
   image: 192.168.4.204:5000/cca-tests/test-runner:latest
   script:
     - echo "=== Analects Server ==="
-    - curl -sf --max-time 10 $CCA_BASE_URL/health | python3 -m json.tool
+    - curl -4sf --max-time 10 $CCA_BASE_URL/health | python3 -m json.tool
     - echo "=== vLLM Server ==="
-    - curl -sf --max-time 10 ${VLLM_BASE_URL%/v1}/health && echo "OK"
+    - curl -4sf --max-time 10 ${VLLM_BASE_URL%/v1}/health && echo "OK"
     - echo "=== Phoenix ==="
-    - curl -sf --max-time 5 $PHOENIX_URL/ > /dev/null && echo "OK" || echo "WARNING - unreachable (non-fatal)"
+    - curl -4sf --max-time 5 $PHOENIX_URL/ > /dev/null && echo "OK" || echo "WARNING - unreachable (non-fatal)"
   rules:
     - if: $RUN_TEST    # Runs whenever RUN_TEST is set (any test trigger)
   timeout: 2m
