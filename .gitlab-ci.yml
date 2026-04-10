@@ -36,7 +36,12 @@ variables:
   PHOENIX_PROJECT_NAME: "cca-tests"
   CCA_RUN_JUDGE: "1"
   CCA_TEST_API_KEY: "cca_k_58591dcb6e1ab9e4dee1fcc30d47f0c6552599741e0f3d55"
-  GIT_STRATEGY: fetch
+  # GIT_STRATEGY: clone (fresh clone per job, not shared cache) — avoids
+  # "fatal: shallow file has changed since we read it" race when the dashboard
+  # fires 30+ pipelines at once and multiple runners fetch the same shallow
+  # repo concurrently.
+  GIT_STRATEGY: clone
+  GIT_DEPTH: "1"
 
 # ── Reusable template for all test jobs ──
 .test-base:
