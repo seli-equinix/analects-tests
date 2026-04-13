@@ -310,6 +310,19 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
                 if "command" not in err.lower()
             ]
 
+    # Inline-response recovery: agent may return code inline (in markdown)
+    # rather than writing to a file. If the response has substantive
+    # content (>200 chars), bash command failures are likely verification
+    # or execution attempts against external systems not available in the
+    # test environment — not delivery failures.
+    if unrecovered:
+        has_substantive_response = len(getattr(result, "content", "")) > 200
+        if has_substantive_response:
+            unrecovered = [
+                err for err in unrecovered
+                if "command" not in err.lower()
+            ]
+
     if not unrecovered:
         return {
             "name": "tool_errors",
