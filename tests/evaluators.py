@@ -332,7 +332,48 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
             "explanation": f"All {len(errors)} tool error(s) recovered via self-correction",
         }
 
-    error_summary = "; ".join(unrecovered[:5])
+    # Prefer the structured `tool_failures` stream (command, returncode,
+    # stderr_tail) over the terse label strings. Correlate by label so
+    # only failures that remain in `unrecovered` are included.
+    failures = getattr(result, "tool_failures", []) or []
+    label_to_failure: Dict[str, Dict[str, Any]] = {}
+    for fail in failures:
+        lbl = fail.get("label")
+        if lbl and lbl not in label_to_failure:
+            label_to_failure[lbl] = fail
+
+    enriched_parts: list[str] = []
+    for err in unrecovered[:5]:
+        fail = label_to_failure.get(err)
+        if not fail:
+            enriched_parts.append(err)
+            continue
+        tool_name = fail.get("tool_name") or "?"
+        command = (fail.get("command") or "").strip().replace("\n", " ")
+        if len(command) > 160:
+            command = command[:157] + "..."
+        kind = fail.get("failure_kind", "")
+        if kind == "nonzero_exit":
+            rc = fail.get("returncode")
+            stderr_tail = (fail.get("stderr_tail") or "").strip()
+            if len(stderr_tail) > 300:
+                stderr_tail = "..." + stderr_tail[-297:]
+            stderr_tail = stderr_tail.replace("\n", " \\n ")
+            enriched_parts.append(
+                f"{tool_name} rc={rc} cmd={command!r} stderr={stderr_tail!r}"
+            )
+        elif kind == "exception":
+            exc_type = fail.get("exception_type", "Exception")
+            exc_msg = (fail.get("exception_message") or "").strip()
+            if len(exc_msg) > 300:
+                exc_msg = exc_msg[:297] + "..."
+            enriched_parts.append(
+                f"{tool_name} raised {exc_type} cmd={command!r} msg={exc_msg!r}"
+            )
+        else:
+            enriched_parts.append(f"{tool_name} failed cmd={command!r}")
+
+    error_summary = "; ".join(enriched_parts)
     if len(unrecovered) > 5:
         error_summary += f" (+{len(unrecovered) - 5} more)"
     return {

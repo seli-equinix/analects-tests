@@ -95,6 +95,20 @@ def generate_test_report(
                 _json.dumps(turn_details, indent=2, default=str)
             )
 
+            # Flatten structured tool failures (command, returncode,
+            # stderr_tail, ...) into a dedicated artifact so offline
+            # triage from the NFS-mirrored reports directory doesn't
+            # need to parse the full tool_calls.json.
+            aggregated_failures: list[dict] = []
+            for turn_idx, td in enumerate(turn_details, 1):
+                for fail in td.get("tool_failures") or []:
+                    record = {"turn": turn_idx, **fail}
+                    aggregated_failures.append(record)
+            if aggregated_failures:
+                (test_dir / "tool_failures.json").write_text(
+                    _json.dumps(aggregated_failures, indent=2, default=str)
+                )
+
         lines: list[str] = []
 
         # Header
@@ -183,8 +197,48 @@ def generate_test_report(
                 # Tool Error Details (from SSE stream labels)
                 if tool_errors:
                     lines.append("### Tool Errors")
+                    # Index structured failures by their label so we can
+                    # expand each terse error line ("Command bash failed")
+                    # with command + rc + stderr when the extension
+                    # supplied run_metadata.
+                    failures_by_label: Dict[str, Dict[str, Any]] = {}
+                    for fail in td.get("tool_failures") or []:
+                        lbl = fail.get("label")
+                        if lbl and lbl not in failures_by_label:
+                            failures_by_label[lbl] = fail
                     for err in tool_errors:
                         lines.append(f"- {err}")
+                        fail = failures_by_label.get(err)
+                        if not fail:
+                            continue
+                        cmd = (fail.get("command") or "").strip()
+                        if len(cmd) > 400:
+                            cmd = cmd[:397] + "..."
+                        kind = fail.get("failure_kind", "")
+                        if kind == "nonzero_exit":
+                            rc = fail.get("returncode")
+                            stderr_tail = (fail.get("stderr_tail") or "").strip()
+                            lines.append(f"  - exit code: `{rc}`")
+                            if cmd:
+                                lines.append("  - command:")
+                                lines.append("    ```")
+                                for cmd_line in cmd.splitlines() or [cmd]:
+                                    lines.append(f"    {cmd_line}")
+                                lines.append("    ```")
+                            if stderr_tail:
+                                lines.append("  - stderr (tail):")
+                                lines.append("    ```")
+                                for s_line in stderr_tail.splitlines()[-20:]:
+                                    lines.append(f"    {s_line}")
+                                lines.append("    ```")
+                        elif kind == "exception":
+                            exc_type = fail.get("exception_type", "Exception")
+                            exc_msg = (fail.get("exception_message") or "").strip()
+                            lines.append(f"  - exception: `{exc_type}`")
+                            if cmd:
+                                lines.append(f"  - command: `{cmd}`")
+                            if exc_msg:
+                                lines.append(f"  - message: {exc_msg}")
                     lines.append("")
 
                 # System Events

@@ -71,6 +71,22 @@ class ChatResult:
         ]
 
     @property
+    def tool_failures(self) -> List[Dict[str, Any]]:
+        """Structured tool-failure records streamed alongside tool_labels.
+
+        Each entry is a dict with the fields populated by the extension
+        that produced the failure. For the bash/command_line extension:
+        ``{tool_name, command, cwd, failure_kind, returncode, stderr_tail,
+        stdout_tail}`` for non-zero exits, or ``{tool_name, command, cwd,
+        failure_kind, exception_type, exception_message}`` for exceptions.
+
+        An additional ``label`` key mirrors the SSE comment label (e.g.
+        ``"Command bash failed"``) so failures can be correlated with
+        ``tool_labels`` / ``tool_errors`` entries.
+        """
+        return self.raw.get("tool_failures", [])
+
+    @property
     def user_identified(self) -> bool:
         return self.metadata.get("user_identified", False)
 
@@ -357,6 +373,7 @@ class CCAClient:
                             "tool_calls": result.metadata.get("tool_calls", []),
                             "tool_labels": list(getattr(result, "tool_labels", [])),
                             "tool_errors": list(getattr(result, "tool_errors", [])),
+                            "tool_failures": list(getattr(result, "tool_failures", [])),
                             "tool_iterations": result.metadata.get("tool_iterations", 0),
                             "tools_escalated": result.metadata.get("tools_escalated", False),
                             "escalated_groups": result.metadata.get("escalated_groups"),
@@ -421,6 +438,7 @@ class CCAClient:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_labels: list[str] = []  # SSE comment labels (progress, errors)
+        tool_failures: list[Dict[str, Any]] = []  # structured failure records
         completion_id = ""
         model = ""
         finish_reason = ""
@@ -490,6 +508,18 @@ class CCAClient:
                         context_metadata = chunk["context_metadata"]
                         continue
 
+                    # Structured tool-failure event — emitted by the
+                    # server alongside the ``: {label}`` comment whenever
+                    # an extension passes ``run_metadata`` to io.system().
+                    # Lets evaluators see the real command, returncode,
+                    # and stderr instead of just a label.
+                    if "tool_failure" in chunk and "choices" not in chunk:
+                        record = dict(chunk["tool_failure"])
+                        if "label" in chunk:
+                            record.setdefault("label", chunk["label"])
+                        tool_failures.append(record)
+                        continue
+
                     completion_id = chunk.get("id", completion_id)
                     model = chunk.get("model", model)
 
@@ -550,6 +580,7 @@ class CCAClient:
             "usage": {},
             "context_metadata": context_metadata,
             "tool_labels": tool_labels,
+            "tool_failures": tool_failures,
         }
         return ChatResult(raw, 0)
 
