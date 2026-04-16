@@ -365,3 +365,147 @@ class TestFieldCoverage:
         # it as a delta. Acceptable — refusal isn't on the hot path for CCA.
         # Future: if the bug surfaces, extend _shred_text to add refusal.
         assert streamed.choices[0].message.content == block.choices[0].message.content
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Downstream-contract assertions (missing in original test suite)
+# ══════════════════════════════════════════════════════════════════════
+#
+# The original byte-identity tests above validated that
+# ``ChunkAccumulator.finalize()`` reconstructs the same string as the
+# blocking response. That's necessary but NOT sufficient. The actual
+# downstream contract is stricter: after finalize, the adapter calls
+# ``_extract_tool_calls`` which does ``json.loads(tc.function.arguments)``
+# on every tool_call. A reconstruction that produces byte-identical-looking
+# chunks for the test fixtures but malformed JSON in real traffic would
+# pass the byte-identity gate and fail in production. That's exactly the
+# class of bug that broke pipeline 6924 (JSONDecodeError at col 15).
+#
+# These tests assert the downstream contract directly.
+
+
+class TestToolCallArgumentsValidJson:
+    """Every tool_call.function.arguments produced by the accumulator
+    MUST parse as valid JSON. Cover the synthetic cases that already exist."""
+
+    def test_synthetic_path_args_parse_as_json(self):
+        import json
+        args = '{"command":"view","path":"/workspace/foo.py"}'
+        block = _make_tool_call_completion("str_replace_editor", args)
+        shredded = _shred_tool_call(block, lambda a: [a[:10], a[10:22], a[22:]])
+        streamed = _roundtrip(block, shredded)
+        assert streamed.choices[0].message.tool_calls
+        for tc in streamed.choices[0].message.tool_calls:
+            # This is the assertion the original test suite was missing.
+            json.loads(tc.function.arguments)
+
+    def test_synthetic_large_file_text_parses_as_json(self):
+        import json
+        payload = "line of python code = 42\n" * 400  # ~10KB
+        args = (
+            '{"command":"create","path":"/workspace/big.py","file_text":"'
+            + payload.replace('"', '\\"').replace("\n", "\\n")
+            + '"}'
+        )
+        block = _make_tool_call_completion("str_replace_editor", args)
+        step = max(1, len(args) // 100)
+        parts = [args[i:i + step] for i in range(0, len(args), step)]
+        shredded = _shred_tool_call(block, lambda _a: parts)
+        streamed = _roundtrip(block, shredded)
+        for tc in streamed.choices[0].message.tool_calls:
+            json.loads(tc.function.arguments)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Real-traffic regression suite
+# ══════════════════════════════════════════════════════════════════════
+#
+# Synthetic shredders can miss real vLLM/Qwen chunk quirks. This class
+# replays fixtures captured from the live streaming path (via the
+# stream_guard chunk tap) and asserts the same downstream contract.
+#
+# Fixtures live in tests/unit/fixtures/stream_guard_captures/*.jsonl.
+# Each one was captured from a real coder-role streaming request.
+#
+# Adding a new fixture: trigger a capture window (dashboard button
+# "/system > Actions > Capture stream chunks (90s)"), then copy the
+# redacted .jsonl from /data/cca/stream_tap/ into the fixture dir.
+# The redaction pass in tap.py already scrubbed credential-looking
+# values; double-check before committing.
+
+
+import pytest
+from pathlib import Path
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "stream_guard_captures"
+_FIXTURES = sorted(p.name for p in _FIXTURE_DIR.glob("*.jsonl")) if _FIXTURE_DIR.exists() else []
+
+
+@pytest.mark.skipif(
+    not _FIXTURES,
+    reason="no committed stream_guard capture fixtures",
+)
+class TestRealTrafficReplay:
+    """Replay committed real-traffic captures through the same code path
+    the adapter uses (ChunkAccumulator + StreamInspector) and assert the
+    downstream JSON contract.
+
+    When this test fails, the .jsonl fixture is a deterministic reproducer
+    — run the replay CLI on it to see the exact chunk and divergence::
+
+        python -m confucius.core.chat_models.stream_guard.replay \\
+            tests/unit/fixtures/stream_guard_captures/<name>.jsonl
+    """
+
+    @pytest.mark.parametrize("fixture_name", _FIXTURES)
+    def test_capture_produces_valid_json_and_completes(self, fixture_name):
+        from confucius.core.chat_models.stream_guard.replay import replay
+        result = replay(_FIXTURE_DIR / fixture_name)
+        assert result.finalize_failed is None, (
+            f"fixture={fixture_name} finalize raised: {result.finalize_failed}"
+        )
+        for status in result.tool_call_json_status:
+            assert status.parses, (
+                f"fixture={fixture_name} tool_call[{status.index}] name={status.name!r} "
+                f"arguments do not parse as JSON: {status.error}\n"
+                f"head={status.sample_head!r}\n"
+                f"tail={status.sample_tail!r}"
+            )
+        # Also surface any non-fatal errors the replay harness collected
+        # — these are accumulator.append / inspector.observe exceptions
+        # that happened per-chunk but didn't fail finalize.
+        assert not result.errors, (
+            f"fixture={fixture_name} replay had {len(result.errors)} error(s): "
+            f"{result.errors[:3]}"
+        )
+
+    @pytest.mark.parametrize("fixture_name", _FIXTURES)
+    def test_inspector_path_matches_accumulator_only(self, fixture_name):
+        """Running through inspector.observe + accumulator.append must match
+        accumulator.append alone. Guards against future refactors where the
+        inspector accidentally mutates chunk objects."""
+        from confucius.core.chat_models.stream_guard.replay import replay
+        with_inspector = replay(_FIXTURE_DIR / fixture_name, through_inspector=True)
+        without_inspector = replay(
+            _FIXTURE_DIR / fixture_name, through_inspector=False
+        )
+        assert with_inspector.content_length == without_inspector.content_length, (
+            f"fixture={fixture_name}: content_length differs with inspector "
+            f"({with_inspector.content_length}) vs without ({without_inspector.content_length}) "
+            f"— inspector may be mutating chunks"
+        )
+        # Tool call arguments must be byte-identical between the two paths.
+        assert len(with_inspector.tool_call_json_status) == \
+            len(without_inspector.tool_call_json_status), (
+            f"fixture={fixture_name}: tool_call count differs"
+        )
+        for a, b in zip(
+            with_inspector.tool_call_json_status,
+            without_inspector.tool_call_json_status,
+        ):
+            assert a.arguments_length == b.arguments_length, (
+                f"fixture={fixture_name} tc[{a.index}]: arguments_length differs"
+            )
+            assert a.sample_head == b.sample_head, (
+                f"fixture={fixture_name} tc[{a.index}]: sample_head differs"
+            )
