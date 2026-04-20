@@ -49,7 +49,7 @@ variables:
   image: 192.168.4.204:5000/cca-tests/test-runner:latest
   needs: [health-check]
   resource_group: cca-llm
-  timeout: 45m                    # Safety net only — the test client's SSE idle timeout (120s) is the real watchdog
+  # No hard timeout — SSE idle timeout (120s) + circuit breaker are the real watchdogs
   artifacts:
     when: always
     paths:
