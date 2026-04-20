@@ -87,7 +87,8 @@ class TestInfraInspectionFlow:
         # Follow-up in same session — agent should have context
         msg2 = (
             "How about Redis specifically — is it responding? "
-            "Can you ping it and tell me how much memory it's using?"
+            "Can you ping it and tell me how much memory it's using? "
+            "The container is called redis-memory and the password is Loveme-sex64."
         )
         r2 = test_run.chat(msg2, session_id=sid)
         evaluate_response(r2, msg2, trace_test, judge_model, "integration")
@@ -118,7 +119,7 @@ class TestInfraInspectionFlow:
         msg3 = (
             "Can you SSH to node1 at 192.168.4.200 and run "
             "'docker node ls' to check the swarm status? "
-            "Use sshpass with user seli."
+            "Use sshpass with user seli and password Loveme-sex64."
         )
         r3 = test_run.chat(msg3, session_id=sid)
         evaluate_response(r3, msg3, trace_test, judge_model, "integration")
