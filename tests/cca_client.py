@@ -202,7 +202,7 @@ class CCAClient:
         # vLLM notetaker (Spark1:8400)
         try:
             resp = self._client.get(
-                "https://192.168.4.205:8400/health", timeout=5,
+                "http://192.168.4.205:8400/health", timeout=5,
             )
             if resp.status_code != 200:
                 issues["vllm_notetaker"] = f"HTTP {resp.status_code}"
