@@ -514,8 +514,13 @@ def eval_coherence(result: ChatResult) -> Dict[str, Any]:
     """
     content = result.content
 
-    # 1. Repeated token sequences
-    if re.search(r"(\b\w{3,}\b)(?:\s+\1){4,}", content):
+    # 1. Repeated token sequences — check outside code fences and tables
+    # Strip code fences and markdown table rows before checking, since
+    # structured data (cmdlet tables, directory listings) naturally
+    # repeats words like "through", "operation", column headers, etc.
+    prose_only = re.sub(r"```.*?```", "", content, flags=re.DOTALL)
+    prose_only = re.sub(r"^\|.*\|$", "", prose_only, flags=re.MULTILINE)
+    if re.search(r"(\b\w{3,}\b)(?:\s+\1){4,}", prose_only):
         return {
             "name": "coherence",
             "annotator_kind": "CODE",
@@ -537,6 +542,17 @@ def eval_coherence(result: ChatResult) -> Dict[str, Any]:
             "score": SCORE_FAIL,
             "label": "xml_tag_leak",
             "explanation": f"Response contains {len(xml_tags)} leaked XML tags",
+        }
+
+    # 2b. Thinking tag leaks — even 1 is a bug
+    think_tags = re.findall(r"</?think[^>]*>", non_fenced)
+    if think_tags:
+        return {
+            "name": "coherence",
+            "annotator_kind": "CODE",
+            "score": SCORE_FAIL,
+            "label": "think_tag_leak",
+            "explanation": f"Response contains {len(think_tags)} leaked thinking tags",
         }
 
     # 3. Bulk paragraph duplication in long responses

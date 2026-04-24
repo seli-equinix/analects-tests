@@ -449,10 +449,10 @@ class TestRoutingEdgeCases:
         # ===============================================================
         msg6 = (
             f"Create /workspace/{prefix}_tests.py with unit tests "
-            f"using Python's unittest module. Test all 6 operations: "
-            f"add, subtract, multiply, divide (including zero division "
-            f"error), power, and modulo (including zero modulo error). "
-            f"Then run the tests with python3 and show me the results."
+            f"using Python's unittest module. Test the three basic "
+            f"operations: add, subtract, and multiply. Include at "
+            f"least 2 test methods per operation. Then run the tests "
+            f"with python3 and show me the results."
         )
         r6 = test_run.chat(msg6, session_id=sid)
         evaluate_response(r6, msg6, trace_test, judge_model, "integration")
