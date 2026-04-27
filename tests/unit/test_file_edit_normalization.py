@@ -204,6 +204,53 @@ class TestDynamicCorrection:
         assert "content" in correction
         assert "file_text" in correction
 
+    def test_str_replace_empty_old_str_points_to_create(self):
+        """Empty old_str is the classic "I want to make a new file" mistake.
+
+        Regression for P8738 — agent called str_replace with old_str="" to
+        write a new doc file, got an opaque ValueError, retried with the
+        same wrong command. Correction must explicitly mention `create`.
+        """
+        raw = {
+            "command": "str_replace",
+            "path": "/workspace/EVA/notes/new.md",
+            "old_str": "",
+            "new_str": "# Notes\n",
+        }
+        error = ValueError(
+            '`str_replace` requires a non-empty `old_str` (the exact '
+            'existing text to find in the file). To create a NEW file, '
+            'use `command="create"` with `file_text` instead.'
+        )
+        correction = _build_dynamic_correction(raw, "str_replace", error)
+        assert "create" in correction.lower()
+        assert "old_str" in correction
+        # Should suggest create, not just dump the raw error
+        assert "file_text" in correction.lower()
+
+    def test_str_replace_file_not_found_points_to_create(self):
+        """File doesn't exist → str_replace can't work → suggest create.
+
+        Second half of P8738 — agent's retry passed a path that didn't
+        exist. The raw FileNotFoundError doesn't tell the agent how to
+        recover; the correction must.
+        """
+        raw = {
+            "command": "str_replace",
+            "path": "/workspace/EVA/notes/new.md",
+            "old_str": "anything",
+            "new_str": "# Notes\n",
+        }
+        error = FileNotFoundError(
+            "File does not exist: /workspace/EVA/notes/new.md. "
+            'To create a new file at this path, use `command="create"` '
+            "with `file_text` instead. `str_replace` only modifies "
+            "existing files."
+        )
+        correction = _build_dynamic_correction(raw, "str_replace", error)
+        assert "create" in correction.lower()
+        assert "does not exist" in correction.lower()
+
 
 # ── Smoke test for the full normalization pipeline ──
 
