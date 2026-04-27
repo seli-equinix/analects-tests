@@ -722,6 +722,193 @@ class CCAClient:
         resp.raise_for_status()
         return resp.json()
 
+    # ─── Phase 9 (GitNexus parity test surface) ────────────────────
+
+    # Search & retrieval
+    def search_codebase(
+        self, query: str, project: Optional[str] = None,
+        language: Optional[str] = None, mode: str = "hybrid", n_results: int = 10,
+    ) -> Dict[str, Any]:
+        """Hybrid (BM25 + semantic + RRF) search via /admin/workspace/search."""
+        body = {"query": query, "mode": mode, "n_results": n_results}
+        if project:
+            body["project"] = project
+        if language:
+            body["language"] = language
+        resp = self._client.post(
+            f"{self.base_url}/admin/workspace/search",
+            json=body, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # Symbol context + impact
+    def get_symbol_context(
+        self, name: str, project: Optional[str] = None,
+        qualified_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params = {"name": name}
+        if project:
+            params["project"] = project
+        if qualified_name:
+            params["qualified_name"] = qualified_name
+        resp = self._client.get(
+            f"{self.base_url}/admin/symbols/context",
+            params=params, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def analyze_impact(
+        self, name: str, direction: str = "both", depth: int = 3,
+        include_tests: bool = False, project: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params = {
+            "name": name, "direction": direction, "depth": depth,
+            "include_tests": str(include_tests).lower(),
+        }
+        if project:
+            params["project"] = project
+        resp = self._client.get(
+            f"{self.base_url}/admin/symbols/impact",
+            params=params, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def detect_changes(
+        self, repo_path: str, scope: str = "unstaged",
+        base_ref: Optional[str] = None, project: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        body = {"repo_path": repo_path, "scope": scope}
+        if base_ref:
+            body["base_ref"] = base_ref
+        if project:
+            body["project"] = project
+        resp = self._client.post(
+            f"{self.base_url}/admin/changes/detect",
+            json=body, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def cypher(
+        self, query: str, params: Optional[Dict[str, Any]] = None,
+        admin_key: str = "",
+    ) -> Dict[str, Any]:
+        headers = {"X-Admin-Key": admin_key} if admin_key else {}
+        resp = self._client.post(
+            f"{self.base_url}/admin/cypher",
+            json={"query": query, "params": params or {}},
+            headers=headers, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # Graph data
+    def graph_nodes(
+        self, project: Optional[str] = None, label: Optional[str] = None,
+        language: Optional[str] = None, limit: int = 500,
+    ) -> Dict[str, Any]:
+        params = {"limit": limit}
+        if project: params["project"] = project
+        if label: params["label"] = label
+        if language: params["language"] = language
+        resp = self._client.get(
+            f"{self.base_url}/admin/graph/nodes",
+            params=params, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def graph_edges(
+        self, project: Optional[str] = None, edge_type: Optional[str] = None,
+        limit: int = 1000,
+    ) -> Dict[str, Any]:
+        params = {"limit": limit}
+        if project: params["project"] = project
+        if edge_type: params["edge_type"] = edge_type
+        resp = self._client.get(
+            f"{self.base_url}/admin/graph/edges",
+            params=params, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def graph_neighborhood(
+        self, node_id: str, depth: int = 2,
+        edge_types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        params = {"node_id": node_id, "depth": depth}
+        if edge_types:
+            params["edge_types"] = ",".join(edge_types)
+        resp = self._client.get(
+            f"{self.base_url}/admin/graph/neighborhood",
+            params=params, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def process_mermaid(self, process_id: str) -> Dict[str, Any]:
+        resp = self._client.get(
+            f"{self.base_url}/admin/graph/process/{process_id}/mermaid",
+            timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # Repo groups
+    def list_groups(self) -> Dict[str, Any]:
+        resp = self._client.get(
+            f"{self.base_url}/admin/groups", timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_group(
+        self, name: str, description: str = "", admin_key: str = "",
+    ) -> Dict[str, Any]:
+        headers = {"X-Admin-Key": admin_key} if admin_key else {}
+        resp = self._client.post(
+            f"{self.base_url}/admin/groups",
+            json={"name": name, "description": description},
+            headers=headers, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def add_group_member(
+        self, group: str, repo_name: str, role: str = "both", admin_key: str = "",
+    ) -> Dict[str, Any]:
+        headers = {"X-Admin-Key": admin_key} if admin_key else {}
+        resp = self._client.post(
+            f"{self.base_url}/admin/groups/{group}/members",
+            json={"repo_name": repo_name, "role": role},
+            headers=headers, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def sync_group(self, group: str, admin_key: str = "") -> Dict[str, Any]:
+        headers = {"X-Admin-Key": admin_key} if admin_key else {}
+        resp = self._client.post(
+            f"{self.base_url}/admin/groups/{group}/sync",
+            headers=headers, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def cross_impact(
+        self, group: str, symbol: str, project: str,
+    ) -> Dict[str, Any]:
+        params = {"symbol": symbol, "project": project}
+        resp = self._client.get(
+            f"{self.base_url}/admin/groups/{group}/cross-impact",
+            params=params, timeout=TIMEOUT_DIAGNOSTIC,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
 
 class TestResourceTracker:
     """Tracks resources created by a single test for targeted cleanup.
