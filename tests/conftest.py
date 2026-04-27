@@ -242,12 +242,25 @@ def trace_test(request, phoenix_tracer):
     time.sleep(1)
     post_deferred_annotations(span)
 
-    # Per-test summary line for real-time monitoring
     metrics = getattr(span, "_test_metrics", {})
+
+    # Compute pytest outcome — always available regardless of metrics.
+    # Non-agent tests (knowledge cmdlet checks, direct API tests) don't
+    # populate metrics, but they still have a rep_call from pytest.
+    # Without this, those tests' results never make it to the dashboard.
+    outcome_str = "PASSED"
+    failure_reason = ""
+    if hasattr(request.node, "rep_call"):
+        outcome_str = request.node.rep_call.outcome.upper()  # PASSED|FAILED|SKIPPED
+        if request.node.rep_call.failed:
+            failure_reason = str(request.node.rep_call.longrepr)[:2000]
+    else:
+        # No rep_call → setup error before the test body ran. Mark as
+        # ERROR so the dashboard surfaces it instead of treating as PASSED.
+        outcome_str = "ERROR"
+
+    # Per-test summary line for real-time monitoring
     if metrics:
-        outcome = "?"
-        if hasattr(request.node, "rep_call"):
-            outcome = request.node.rep_call.outcome.upper()
         route = metrics.get("route", "?")
         steps = metrics.get("estimated_steps", "?")
         iters = metrics.get("tool_iterations", "?")
@@ -259,45 +272,42 @@ def trace_test(request, phoenix_tracer):
             flags.append("CB_FIRED")
         flag_str = f" [{', '.join(flags)}]" if flags else ""
         print(
-            f"\n  >> {span_name}: {outcome} | "
+            f"\n  >> {span_name}: {outcome_str} | "
             f"route={route} steps={steps} iters={iters} "
             f"{elapsed_s:.1f}s{flag_str}",
             flush=True,
         )
 
-    # Generate .md test report for Claude Code review
+    # Post individual test result to DB (CI mode only) — runs for EVERY
+    # pytest test, regardless of whether it called the agent. Knowledge
+    # tests like test_cmdlet_search are parametrized 100+ times and only
+    # show up on the dashboard via this post. metrics may be empty dict
+    # for non-agent tests; the endpoint accepts that.
+    _pipeline_id = os.environ.get("CI_PIPELINE_ID", "")
+    _ci_job = os.environ.get("RUN_TEST", "")
+    if _pipeline_id and _ci_job:
+        _api_key = os.environ.get("CCA_TEST_API_KEY", "")
+        _auth_h = (
+            {"Authorization": f"Bearer {_api_key}"} if _api_key else {}
+        )
+        _post_test_result(
+            cca_url=os.environ.get(
+                "CCA_BASE_URL", "https://192.168.4.205:8500"
+            ),
+            headers=_auth_h,
+            ci_job=_ci_job,
+            pipeline_id=_pipeline_id,
+            node_id=span_name.replace("::", "-"),
+            status=outcome_str,
+            metrics=metrics,
+            failure_reason=failure_reason,
+        )
+
+    # Generate .md test report for Claude Code review (agent tests only —
+    # non-agent tests have no transcript/turns/iterations to render).
     if metrics:
         try:
             from tests.report_generator import generate_test_report
-
-            outcome_str = "PASSED"
-            failure_reason = ""
-            if hasattr(request.node, "rep_call"):
-                outcome_str = request.node.rep_call.outcome.upper()
-                if request.node.rep_call.failed:
-                    # Capture the actual assertion error / traceback
-                    failure_reason = str(request.node.rep_call.longrepr)[:2000]
-
-            # Post individual test result to DB (CI mode only)
-            _pipeline_id = os.environ.get("CI_PIPELINE_ID", "")
-            _ci_job = os.environ.get("RUN_TEST", "")
-            if _pipeline_id and _ci_job:
-                _api_key = os.environ.get("CCA_TEST_API_KEY", "")
-                _auth_h = (
-                    {"Authorization": f"Bearer {_api_key}"} if _api_key else {}
-                )
-                _post_test_result(
-                    cca_url=os.environ.get(
-                        "CCA_BASE_URL", "https://192.168.4.205:8500"
-                    ),
-                    headers=_auth_h,
-                    ci_job=_ci_job,
-                    pipeline_id=_pipeline_id,
-                    node_id=span_name.replace("::", "-"),
-                    status=outcome_str,
-                    metrics=metrics,
-                    failure_reason=failure_reason,
-                )
 
             test_dir = generate_test_report(
                 test_name=span_name.replace("::", "-"),
