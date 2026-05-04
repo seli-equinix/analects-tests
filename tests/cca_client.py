@@ -150,8 +150,16 @@ class CCAClient:
         default_headers: dict[str, str] = {}
         if self.api_key:
             default_headers["Authorization"] = f"Bearer {self.api_key}"
+        # CCA serves a self-signed cert that doesn't validate from
+        # arbitrary hosts (cert SAN is the container hostname). Tests
+        # running inside the cca-tests Docker image have the cert
+        # mounted; tests/scripts running on the dev host (node5) hit
+        # IP-address-mismatch errors. Setting CCA_VERIFY_SSL=0 disables
+        # verification — only safe on the local LAN.
+        verify_ssl = os.getenv("CCA_VERIFY_SSL", "1") not in ("0", "false", "no")
         self._client = httpx.Client(
             headers=default_headers,
+            verify=verify_ssl,
             timeout=httpx.Timeout(
                 connect=TIMEOUT_CONNECT,
                 read=idle_timeout,
