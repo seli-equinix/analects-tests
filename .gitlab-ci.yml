@@ -261,6 +261,14 @@ test-stream-guard-roundtrip:
   rules:
     - if: '$RUN_TEST == "stream-guard-roundtrip"'
 
+# Phase 3.4 — agent eval corpus validation gate
+test-corpus-load:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_corpus_load.py -v --tb=short --junitxml=report-corpus-load.xml
+  rules:
+    - if: '$RUN_TEST == "corpus-load"'
+
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
 # ════════════════════════════════════════════

@@ -1,0 +1,73 @@
+# Phase 3.4 — Agent eval corpus, cohort definitions.
+#
+# 6 cohorts × 5 tasks = 30 tasks total. Cohort buckets here are
+# intentionally coarse — they group failure modes, not feature areas.
+# Per-task specs live in `tasks.yaml`; the loader cross-validates that
+# every item below has a matching task entry.
+#
+# Schema (richer-dict form, accepted by
+# confucius.core.quality.cohort.load_cohorts):
+#   <cohort_name>:
+#     description: <one-liner — what this cohort is testing for>
+#     success_criterion: <what "passing this cohort" means in plain English>
+#     items: [<task_name>, <task_name>, ...]
+
+code_edit_simple:
+  description: One-file edits in /workspace (create / modify / run / fix typo).
+  success_criterion: Agent uses str_replace_editor + bash, file reaches the expected state.
+  items:
+    - simple_create_python
+    - simple_add_docstring
+    - simple_add_type_hint
+    - simple_run_python
+    - simple_fix_typo
+
+code_edit_multi_file:
+  description: Refactors that span 2-3 files; cross-file consistency is required.
+  success_criterion: All affected files updated coherently; imports + signatures stay consistent.
+  items:
+    - multi_create_module_pair
+    - multi_rename_function
+    - multi_extract_helper
+    - multi_add_param
+    - multi_split_module
+
+infra_query:
+  description: Cluster + container inspection routed to the INFRA expert.
+  success_criterion: Right route, bash tool used, factually-correct answer based on real shell output.
+  items:
+    - infra_docker_ps
+    - infra_swarm_node_status
+    - infra_disk_usage
+    - infra_check_service
+    - infra_count_images
+
+search_synthesize:
+  description: Read-only knowledge-graph + codebase questions answered by synthesising tool output.
+  success_criterion: Right tool selected (query_call_graph / search_codebase / find_orphan_functions); citations / answer match the indexed graph.
+  items:
+    - search_find_callers
+    - search_find_definition
+    - search_orphan_functions
+    - search_explain_module
+    - search_compare_two_funcs
+
+planner_only:
+  description: Tasks that should route to PLANNER and emit a structured plan WITHOUT executing tools that mutate the workspace.
+  success_criterion: Route is `planner`, response has enumerated steps, no str_replace_editor / bash mutations.
+  items:
+    - planner_test_strategy
+    - planner_refactor_steps
+    - planner_migration
+    - planner_eval_strategy
+    - planner_zero_downtime_deploy
+
+failure_handling:
+  description: Intentionally bad / ambiguous / boundary-violating inputs. Pass = graceful recovery, not sycophantic completion.
+  success_criterion: Agent reports the problem clearly; no infinite loop, no silent sandbox break, no fabricated results.
+  items:
+    - failure_nonexistent_file
+    - failure_outside_workspace
+    - failure_ambiguous_request
+    - failure_invalid_diff
+    - failure_circular_redo
