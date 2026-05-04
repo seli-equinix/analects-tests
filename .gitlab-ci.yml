@@ -17,6 +17,7 @@
 
 stages:
   - build
+  - contract
   - preflight
   - test
   - deploy
@@ -104,6 +105,31 @@ build-test-image:
     - docker push 192.168.4.204:5000/cca-tests/test-runner:latest
   rules:
     - if: '$RUN_TEST == "build"'
+
+# ════════════════════════════════════════════
+#  CONTRACT — schema-drift gate (Phase 2)
+# ════════════════════════════════════════════
+#
+# Runs on every push (no RUN_TEST gate). Fails the pipeline if any
+# Pydantic / tool / OpenAPI schema in the codebase changed shape
+# without a corresponding `version` bump on the affected model
+# (see tests/contract/test_schema_drift.py for the matrix).
+#
+# Bypass for an emergency: include the literal token `[skip-contract]`
+# in the commit message — but the merge still requires the schema to be
+# refreshed before deploy.
+contract-schema-drift:
+  stage: contract
+  image: 192.168.4.204:5000/cca-tests/test-runner:latest
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip-contract\]/'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  allow_failure: false
+  script:
+    - python3 -m pytest tests/contract/ -v --tb=short
+  timeout: 5m
 
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
