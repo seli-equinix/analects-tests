@@ -25,10 +25,20 @@ import pytest
 
 # Importing these modules registers every Y/bonus metric and constructs
 # the rubrics. Side-effect imports are intentional.
-from tests.agent_eval import metrics as agent_metrics  # noqa: F401
+from tests.agent_eval import metrics as agent_metrics
 from tests.agent_eval import rubrics as agent_rubrics
 
 from confucius.core.quality import MetricResult, get_metric
+
+
+@pytest.fixture(autouse=True)
+def _restore_agent_registry():
+    """Ensure the agent metrics are registered before every test in
+    this file. Necessary because tests in `test_quality_eval.py` may
+    call `clear_registry_for_tests()` and run earlier in the session,
+    wiping our import-time registration."""
+    agent_metrics.ensure_registered()
+    yield
 
 
 @dataclass

@@ -368,3 +368,48 @@ ALL_METRIC_NAMES: tuple[str, ...] = (
     "bonus.code_present",
     "bonus.no_self_repetition",
 )
+
+
+# ── Idempotent re-registration helper ───────────────────────────────
+#
+# The Phase 3.2 registry is a module-level dict; tests in
+# `test_quality_eval.py` call `clear_registry_for_tests()` to keep
+# each test class independent. That wipe also removes the metrics
+# this module registered at import time, so any test in a later
+# session that depends on the agent metrics would see them missing.
+#
+# `ensure_registered()` walks the local module's @register_metric
+# decorators and re-runs them (the decorator overwrites silently if
+# the slug is already present, so calling it twice is a no-op when
+# the registry is already populated).
+
+
+def ensure_registered() -> None:
+    """Re-attach every Y/bonus metric to the global registry.
+
+    Idempotent. Safe to call from a setup_method/setup_class fixture
+    in any test file that depends on the agent metrics.
+    """
+    # The decorators ran at module import; the wrapped functions are
+    # bound to module globals. Re-register each by passing the wrapped
+    # function to register_metric again.
+    bindings = {
+        "Y1.task_completion": y1_task_completion,
+        "Y2.tool_errors_clean": y2_tool_errors,
+        "Y3.iteration_efficiency": y3_iteration_efficiency,
+        "Y4.response_quality": y4_response_quality,
+        "Y5.no_hallucination": y5_no_hallucination,
+        "Y6.no_stream_guard_fire": y6_no_stream_guard_fire,
+        "Y7.latency_ok": y7_latency,
+        "Y8.token_cost": y8_token_cost,
+        "bonus.not_empty": bonus_not_empty,
+        "bonus.no_error": bonus_no_error,
+        "bonus.no_refusal": bonus_no_refusal,
+        "bonus.coherent": bonus_coherent,
+        "bonus.user_identified": bonus_user_identified,
+        "bonus.code_present": bonus_code_present,
+        "bonus.no_self_repetition": bonus_no_self_repetition,
+    }
+    from confucius.core.quality.metric import _METRICS as _registry
+    for name, wrapped in bindings.items():
+        _registry[name] = wrapped

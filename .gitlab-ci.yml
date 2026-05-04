@@ -128,8 +128,138 @@ contract-schema-drift:
     - if: '$CI_PIPELINE_SOURCE == "web"'
   allow_failure: false
   script:
-    - python3 -m pytest tests/contract/ -v --tb=short
+    - python3 -m pytest tests/contract/ -v --tb=short --junitxml=report-contract-tests.xml
+  artifacts:
+    when: always
+    paths: ["report-*.xml"]
+    reports:
+      junit: "report-*.xml"
+    expire_in: 30 days
   timeout: 5m
+
+# Phase 3.3.5 — unit-test bucket gate. Mirrors contract-schema-drift:
+# runs on every push (no RUN_TEST gate), `allow_failure: false`. Catches
+# regressions in tests/unit/ before they reach the integration suite.
+unit-tests:
+  stage: contract
+  image: 192.168.4.204:5000/cca-tests/test-runner:latest
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip-contract\]/'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  allow_failure: false
+  script:
+    - python3 -m pytest tests/unit/ -v --tb=short --junitxml=report-unit-tests.xml
+  artifacts:
+    when: always
+    paths: ["report-*.xml"]
+    reports:
+      junit: "report-*.xml"
+    expire_in: 30 days
+  timeout: 5m
+
+# Per-test unit + contract jobs (RUN_TEST gated). These let the CCA UI
+# dashboard's per-test Run button trigger a single test the same way it
+# does for integration tests. They share a lightweight base — unlike
+# `.test-base`, they don't depend on `health-check` because pure-Python
+# tests don't need a live CCA server.
+.unit-test-base:
+  stage: contract
+  image: 192.168.4.204:5000/cca-tests/test-runner:latest
+  artifacts:
+    when: always
+    paths: ["report-*.xml"]
+    reports:
+      junit: "report-*.xml"
+    expire_in: 30 days
+  timeout: 5m
+
+test-context-fingerprint:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_context_fingerprint.py -v --tb=short --junitxml=report-context-fingerprint.xml
+  rules:
+    - if: '$RUN_TEST == "context-fingerprint"'
+
+test-quality-eval:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_quality_eval.py -v --tb=short --junitxml=report-quality-eval.xml
+  rules:
+    - if: '$RUN_TEST == "quality-eval"'
+
+test-agent-rubric:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_agent_rubric.py -v --tb=short --junitxml=report-agent-rubric.xml
+  rules:
+    - if: '$RUN_TEST == "agent-rubric"'
+
+test-schema-drift:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/contract/test_schema_drift.py -v --tb=short --junitxml=report-schema-drift.xml
+  rules:
+    - if: '$RUN_TEST == "schema-drift"'
+
+# Pre-existing unit tests (stream_guard suite, bash guardrails, etc.) —
+# now also reachable via the dashboard's per-test Run button.
+test-bash-guardrails:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_bash_guardrails.py -v --tb=short --junitxml=report-bash-guardrails.xml
+  rules:
+    - if: '$RUN_TEST == "bash-guardrails"'
+
+test-degeneration-policy:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_degeneration_policy.py -v --tb=short --junitxml=report-degeneration-policy.xml
+  rules:
+    - if: '$RUN_TEST == "degeneration-policy"'
+
+test-file-edit-normalization:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_file_edit_normalization.py -v --tb=short --junitxml=report-file-edit-normalization.xml
+  rules:
+    - if: '$RUN_TEST == "file-edit-normalization"'
+
+test-is-degenerate:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_is_degenerate.py -v --tb=short --junitxml=report-is-degenerate.xml
+  rules:
+    - if: '$RUN_TEST == "is-degenerate"'
+
+test-stream-guard-accumulator:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_stream_guard_accumulator.py -v --tb=short --junitxml=report-stream-guard-accumulator.xml
+  rules:
+    - if: '$RUN_TEST == "stream-guard-accumulator"'
+
+test-stream-guard-arg-parser:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_stream_guard_arg_parser.py -v --tb=short --junitxml=report-stream-guard-arg-parser.xml
+  rules:
+    - if: '$RUN_TEST == "stream-guard-arg-parser"'
+
+test-stream-guard-detectors:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_stream_guard_detectors.py -v --tb=short --junitxml=report-stream-guard-detectors.xml
+  rules:
+    - if: '$RUN_TEST == "stream-guard-detectors"'
+
+test-stream-guard-roundtrip:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_stream_guard_roundtrip.py -v --tb=short --junitxml=report-stream-guard-roundtrip.xml
+  rules:
+    - if: '$RUN_TEST == "stream-guard-roundtrip"'
 
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
