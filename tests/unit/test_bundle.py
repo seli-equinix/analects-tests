@@ -173,3 +173,143 @@ class TestRoundtrip:
         round_tripped = json.loads(s)
         h2 = compute_bundle_hash(round_tripped)
         assert h1 == h2
+
+
+# ── Raw-sqlite version stamping (FastAPI side) ──────────────────────
+
+
+class TestEnsureVersionViaSqlite:
+    """Smoke tests for the parallel raw-sqlite stamping path that
+    catches FastAPI saves which bypass Django's post_save signal."""
+
+    def _make_db(self, tmp_path):
+        import sqlite3
+        db_path = str(tmp_path / "test.sqlite3")
+        conn = sqlite3.connect(db_path)
+        # Minimal versions of the two tables — only the columns that
+        # ``ensure_version_via_sqlite`` reads/writes.
+        conn.executescript(
+            """
+            CREATE TABLE ui_contextbundle (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                route varchar(20) NOT NULL UNIQUE,
+                description TEXT NOT NULL,
+                workspace_context_ref varchar(64) NOT NULL,
+                schema_version varchar(10) NOT NULL,
+                created_at datetime NOT NULL,
+                updated_at datetime NOT NULL
+            );
+            CREATE TABLE ui_contextbundleversion (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bundle_hash varchar(64) NOT NULL UNIQUE,
+                parent_hash varchar(64) NOT NULL,
+                status varchar(20) NOT NULL,
+                member_refs TEXT NOT NULL,
+                eval_pass_rate REAL,
+                eval_summary_path varchar(300) NOT NULL,
+                created_at datetime NOT NULL,
+                created_by varchar(80) NOT NULL,
+                activated_at datetime,
+                activated_by varchar(80) NOT NULL,
+                schema_version varchar(10) NOT NULL,
+                bundle_id bigint NOT NULL
+            );
+            """
+        )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_first_stamp_is_live(self, tmp_path):
+        from confucius.core.quality.bundle import ensure_version_via_sqlite
+        db_path = self._make_db(tmp_path)
+        status = ensure_version_via_sqlite(
+            "coder",
+            bundle_hash="a" * 64,
+            payload={"route": "coder"},
+            full_bodies={"task.coder": "body"},
+            db_path=db_path,
+        )
+        assert status == "live"
+
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT status, activated_by FROM ui_contextbundleversion"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "live"
+        assert rows[0][1] == "auto-on-save"  # default created_by promoted
+        conn.close()
+
+    def test_second_stamp_is_candidate(self, tmp_path):
+        from confucius.core.quality.bundle import ensure_version_via_sqlite
+        db_path = self._make_db(tmp_path)
+        ensure_version_via_sqlite(
+            "coder", bundle_hash="a" * 64,
+            payload={"route": "coder"}, full_bodies={}, db_path=db_path,
+        )
+        status = ensure_version_via_sqlite(
+            "coder", bundle_hash="b" * 64,
+            payload={"route": "coder", "v": 2}, full_bodies={}, db_path=db_path,
+        )
+        assert status == "candidate"
+
+    def test_idempotent_for_same_hash(self, tmp_path):
+        from confucius.core.quality.bundle import ensure_version_via_sqlite
+        db_path = self._make_db(tmp_path)
+        for _ in range(3):
+            ensure_version_via_sqlite(
+                "coder", bundle_hash="a" * 64,
+                payload={"route": "coder"}, full_bodies={}, db_path=db_path,
+            )
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        n = conn.execute("SELECT COUNT(*) FROM ui_contextbundleversion").fetchone()[0]
+        conn.close()
+        assert n == 1  # second + third call short-circuited
+
+    def test_parent_hash_chains(self, tmp_path):
+        from confucius.core.quality.bundle import ensure_version_via_sqlite
+        db_path = self._make_db(tmp_path)
+        ensure_version_via_sqlite(
+            "coder", bundle_hash="a" * 64,
+            payload={"route": "coder"}, full_bodies={}, db_path=db_path,
+        )
+        ensure_version_via_sqlite(
+            "coder", bundle_hash="b" * 64,
+            payload={"route": "coder", "v": 2}, full_bodies={}, db_path=db_path,
+        )
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT bundle_hash, parent_hash, status FROM ui_contextbundleversion ORDER BY id"
+        ).fetchall()
+        conn.close()
+        assert rows[0] == ("a" * 64, "", "live")
+        assert rows[1] == ("b" * 64, "a" * 64, "candidate")
+
+    def test_missing_db_returns_none(self, tmp_path):
+        from confucius.core.quality.bundle import ensure_version_via_sqlite
+        bogus = str(tmp_path / "does-not-exist.sqlite3")
+        result = ensure_version_via_sqlite(
+            "coder", bundle_hash="a" * 64,
+            payload={}, full_bodies={}, db_path=bogus,
+        )
+        assert result is None  # graceful no-op, not an exception
+
+    def test_routes_get_independent_bundles(self, tmp_path):
+        from confucius.core.quality.bundle import ensure_version_via_sqlite
+        db_path = self._make_db(tmp_path)
+        s1 = ensure_version_via_sqlite(
+            "coder", bundle_hash="a" * 64,
+            payload={"route": "coder"}, full_bodies={}, db_path=db_path,
+        )
+        s2 = ensure_version_via_sqlite(
+            "search", bundle_hash="b" * 64,
+            payload={"route": "search"}, full_bodies={}, db_path=db_path,
+        )
+        # Each route's first stamp is its own live — they don't share
+        # the "has_live" check across bundles.
+        assert s1 == "live"
+        assert s2 == "live"
