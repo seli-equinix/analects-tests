@@ -1,0 +1,62 @@
+# Phase 3.7 — eval-gate threshold contract.
+#
+# Per-bundle pass-rate floors enforced by
+# `tests/contract/test_eval_thresholds.py` against the captured replay
+# corpus + scored rubrics. A bundle that drops below any of these
+# numbers fails the gate and blocks the PR.
+#
+# Schema:
+#   <bundle_id_prefix>:
+#     description: <free text>
+#     min_rubric_pct: <float, 0-100>
+#     min_criterion_pct: <float, 0-100>
+#     min_both_pct: <float, 0-100>
+#     min_tasks: <int, optional — fail if this bundle scored fewer
+#                 than N tasks (catches accidental empty corpus)>
+#
+# Lookup order: longest-prefix match against the bundle_id, then
+# `default`. The `<no-bundle>` synthetic key matches the clarify /
+# direct-answer captures that don't compute a fingerprint.
+#
+# Numbers below are baselined against the Phase 3.5 captured corpus
+# (~commit `0835911f`); future bundles must stay at or above these.
+# Bumping a threshold up requires a re-capture pass that verifies the
+# bundle clears it.
+
+default:
+  description: Fallback for bundles not listed below — generous floor so unknown bundles don't insta-fail.
+  min_rubric_pct: 50.0
+  min_criterion_pct: 70.0
+  min_both_pct: 40.0
+  min_tasks: 1
+
+# Coder bundle baseline — most tasks live here.
+"c866391c225e5d08":
+  description: Coder route + most failure_handling tasks. Includes the multi-file refactor cohort whose Y3 efficiency tends to fail (multi_split_module 134 iters etc.).
+  min_rubric_pct: 55.0     # current 65%, 10pt buffer
+  min_criterion_pct: 80.0  # current 85%, 5pt buffer
+  min_both_pct: 45.0       # current 50%, 5pt buffer
+  min_tasks: 15
+
+"a822e6a1d01bd6c8":
+  description: Infra route — small but historically green.
+  min_rubric_pct: 80.0
+  min_criterion_pct: 80.0
+  min_both_pct: 80.0
+  min_tasks: 4
+
+"5e1aa1c5e82628b4":
+  description: Planner route — currently 100%; allow some slack for prompt-driven flakiness on the judge metrics later.
+  min_rubric_pct: 75.0
+  min_criterion_pct: 75.0
+  min_both_pct: 70.0
+  min_tasks: 4
+
+# `<no-bundle>` matches captures from clarify / direct routes that
+# don't compute a Phase-0 fingerprint (no agent loop runs).
+no-bundle:
+  description: Clarify / direct-answer captures (no fingerprint, no agent loop).
+  min_rubric_pct: 50.0
+  min_criterion_pct: 50.0
+  min_both_pct: 50.0
+  min_tasks: 1

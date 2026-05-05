@@ -277,6 +277,22 @@ test-runner:
   rules:
     - if: '$RUN_TEST == "runner"'
 
+# Phase 3.7 — eval-gate threshold contract (per-bundle pass-rate floors)
+test-eval-thresholds:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/contract/test_eval_thresholds.py -v --tb=short --junitxml=report-eval-thresholds.xml
+  rules:
+    - if: '$RUN_TEST == "eval-thresholds"'
+
+# Phase 3.8 — byte-identical determinism contract for LIVE_SUMMARY
+test-eval-determinism:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/contract/test_eval_determinism.py -v --tb=short --junitxml=report-eval-determinism.xml
+  rules:
+    - if: '$RUN_TEST == "eval-determinism"'
+
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
 # ════════════════════════════════════════════
