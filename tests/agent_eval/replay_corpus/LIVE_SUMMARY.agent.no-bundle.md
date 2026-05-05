@@ -2,7 +2,6 @@
 
 - **bundle_hash**: no-bundle
 - **rubric**: agent.eval.v1
-- **generated_at**: 2026-05-05T01:42:47.284041+00:00
 - **overall_pass_rate**: 1/1 (100.0%)
 
 ## Cohort: failure_handling (1/1 passed)

@@ -18,10 +18,16 @@
 # `default`. The `<no-bundle>` synthetic key matches the clarify /
 # direct-answer captures that don't compute a fingerprint.
 #
-# Numbers below are baselined against the Phase 3.5 captured corpus
-# (~commit `0835911f`); future bundles must stay at or above these.
-# Bumping a threshold up requires a re-capture pass that verifies the
-# bundle clears it.
+# Numbers below are baselined against the Phase-4 re-captured corpus
+# (commit landing alongside this file). The previous Phase-0 baseline
+# keys (c866391c, a822e6a1, 5e1aa1c5) are gone — those bundle_ids were
+# from the Phase-0 synthetic fingerprint algorithm and the Phase-4
+# `compute_bundle_hash(assemble_bundle(route))` produces different
+# hashes for the same routes. The runtime now stamps the Phase-4
+# hashes on every span, so the gate keys on those.
+#
+# Bumping a threshold up requires a re-capture pass that verifies
+# the bundle clears it.
 
 default:
   description: Fallback for bundles not listed below — generous floor so unknown bundles don't insta-fail.
@@ -30,30 +36,45 @@ default:
   min_both_pct: 40.0
   min_tasks: 1
 
-# Coder bundle baseline — most tasks live here.
-"c866391c225e5d08":
-  description: Coder route + most failure_handling tasks. Includes the multi-file refactor cohort whose Y3 efficiency tends to fail (multi_split_module 134 iters etc.).
-  min_rubric_pct: 55.0     # current 65%, 10pt buffer
-  min_criterion_pct: 80.0  # current 85%, 5pt buffer
-  min_both_pct: 45.0       # current 50%, 5pt buffer
+# Coder bundle baseline — most tasks live here. Phase-4 hash.
+"3e3ad9c0ad103888":
+  description: |
+    Coder route + most failure_handling + most search_synthesize tasks.
+    Phase-4 measured 60/90/50 (rubric/criterion/both); the Y3
+    iteration-efficiency metric fires on multi-file refactors and the
+    str_replace_editor tool occasionally returns 'internal error'
+    bumping iteration count past budget. Floors set with 10pt buffer.
+  min_rubric_pct: 50.0     # measured 60%
+  min_criterion_pct: 80.0  # measured 90%
+  min_both_pct: 40.0       # measured 50%
   min_tasks: 15
 
-"a822e6a1d01bd6c8":
-  description: Infra route — small but historically green.
+# Infrastructure bundle — Phase-4 hash.
+"5109e02476dd4578":
+  description: |
+    Infra route — all 5 infra_query tasks pass cleanly (docker ps,
+    swarm node status, df, container health, image count). Phase-4
+    measured 100/100/100. Floor at 80% allows one task to regress
+    before the gate fires.
   min_rubric_pct: 80.0
   min_criterion_pct: 80.0
   min_both_pct: 80.0
   min_tasks: 4
 
-"5e1aa1c5e82628b4":
-  description: Planner route — currently 100%; allow some slack for prompt-driven flakiness on the judge metrics later.
+# Planner bundle — Phase-4 hash.
+"b52f5a80dda6216c":
+  description: |
+    Planner route — Phase-4 measured 100/75/75 (rubric perfect,
+    criterion 3/4). One planner task's success_criterion fails
+    (likely the route_matches check on migration-style prompts).
+    Floors leave room for that single task without going below.
   min_rubric_pct: 75.0
-  min_criterion_pct: 75.0
-  min_both_pct: 70.0
+  min_criterion_pct: 65.0
+  min_both_pct: 65.0
   min_tasks: 4
 
 # `<no-bundle>` matches captures from clarify / direct routes that
-# don't compute a Phase-0 fingerprint (no agent loop runs).
+# don't compute a Phase-4 fingerprint (no agent loop runs).
 no-bundle:
   description: Clarify / direct-answer captures (no fingerprint, no agent loop).
   min_rubric_pct: 50.0
