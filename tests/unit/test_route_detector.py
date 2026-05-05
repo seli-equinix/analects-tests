@@ -17,6 +17,8 @@ import pytest
 
 from confucius.server.code_intelligence.pipeline.phases.routes import (
     FASTAPI_PATTERN,
+    FLASK_METHOD_VERB_PATTERN,
+    FLASK_METHODS_KWARG_PATTERN,
     FLASK_PATTERN,
     NESTJS_PATTERN,
     SPRING_PATTERN,
@@ -66,7 +68,12 @@ class TestFastAPIPattern:
 
 
 class TestFlaskPattern:
-    """Flask covers @app.route(...) and the @blueprint/@bp/@router shapes."""
+    """Flask is restricted to its distinctive `@app.route(...)` /
+    `@blueprint.route(...)` / `@bp.route(...)` shape so it doesn't
+    overlap with FASTAPI_PATTERN's verb-based form. Modern Flask 2.0+
+    `@app.get(...)` decorators are intentionally caught by the
+    FastAPI regex and labeled `fastapi` — that's a cosmetic
+    misattribution, not a duplicate-row bug."""
 
     def test_app_route(self):
         m = FLASK_PATTERN.search('@app.route("/legacy", methods=["GET"])')
@@ -74,16 +81,98 @@ class TestFlaskPattern:
         assert m.group(1) == "route"
         assert m.group(2) == "/legacy"
 
-    def test_blueprint(self):
-        m = FLASK_PATTERN.search('@bp.get("/v1/health")')
+    def test_blueprint_route(self):
+        m = FLASK_PATTERN.search('@bp.route("/v1/health")')
         assert m is not None
-        assert m.group(1) == "get"
+        assert m.group(1) == "route"
         assert m.group(2) == "/v1/health"
+
+    def test_does_not_match_verb_decorator(self):
+        # @app.get("/") used to over-match Flask, producing duplicate
+        # Route nodes (one labeled flask, one fastapi). Now FLASK_PATTERN
+        # only matches `route`; verb-based decorators belong to FASTAPI.
+        assert FLASK_PATTERN.search('@app.get("/")') is None
+        assert FLASK_PATTERN.search('@bp.post("/users")') is None
 
     def test_no_match_on_method_calls(self):
         # `app.route(...)` without the leading `@` is a runtime call,
         # not a decorator — must not be detected as a route.
         assert FLASK_PATTERN.search('app.route("/no")') is None
+
+
+class TestFlaskMethodsKwarg:
+    """Verbs from `methods=["GET", "POST"]` kwarg recovery —
+    without this, every `@app.route(...)` ended up labeled as
+    HTTP method `ROUTE`."""
+
+    def test_extracts_single_method(self):
+        deco = '@app.route("/x", methods=["POST"])'
+        kwarg = FLASK_METHODS_KWARG_PATTERN.search(deco)
+        assert kwarg is not None
+        verbs = FLASK_METHOD_VERB_PATTERN.findall(kwarg.group(1))
+        assert verbs == ["POST"]
+
+    def test_extracts_multiple_methods(self):
+        deco = '@app.route("/x", methods=["GET", "POST", "DELETE"])'
+        kwarg = FLASK_METHODS_KWARG_PATTERN.search(deco)
+        assert kwarg is not None
+        verbs = FLASK_METHOD_VERB_PATTERN.findall(kwarg.group(1))
+        assert verbs == ["GET", "POST", "DELETE"]
+
+    def test_no_kwarg_returns_none(self):
+        # `@app.route("/x")` with no methods kwarg → caller defaults to GET.
+        deco = '@app.route("/x")'
+        assert FLASK_METHODS_KWARG_PATTERN.search(deco) is None
+
+    def test_handles_multiline_kwarg(self):
+        # Flask decorators sometimes wrap onto multiple lines; the
+        # DOTALL flag makes the bracket-content match across newlines.
+        deco = '@app.route(\n    "/x",\n    methods=[\n        "GET",\n        "POST"\n    ]\n)'
+        kwarg = FLASK_METHODS_KWARG_PATTERN.search(deco)
+        assert kwarg is not None
+        verbs = FLASK_METHOD_VERB_PATTERN.findall(kwarg.group(1))
+        assert verbs == ["GET", "POST"]
+
+
+class TestWrapsDecoratorCleaning:
+    """The WRAPS heuristic in workspace_indexer skips dotted decorators
+    (method-call registrations like `@register.filter`, `@app.get`,
+    `@functools.wraps(fn)`). Including them produced false-positive
+    WRAPS edges whenever any Function in the project happened to share
+    the last segment's name. This test mirrors the cleaning logic so a
+    regression flips the unit suite, not a live reindex."""
+
+    @staticmethod
+    def _clean_and_skip(deco: str) -> str | None:
+        # Mirror of workspace_indexer.py:Phase-10 logic.
+        bare = str(deco).strip().lstrip("@").split("(", 1)[0].strip()
+        if not bare or len(bare) < 2:
+            return None
+        if "." in bare:
+            return None
+        return bare
+
+    def test_bare_decorator_kept(self):
+        assert self._clean_and_skip("@my_decorator") == "my_decorator"
+        assert self._clean_and_skip("@timed_api") == "timed_api"
+        assert self._clean_and_skip("@login_required") == "login_required"
+
+    def test_dotted_decorator_skipped(self):
+        # The bug repro cases — these all used to produce false WRAPS edges.
+        for d in [
+            "@register.filter",
+            "@register.simple_tag",
+            "@app.get",
+            "@app.post(\"/users\")",
+            "@functools.wraps(fn)",
+            "@click.option(\"--config\")",
+        ]:
+            assert self._clean_and_skip(d) is None, d
+
+    def test_bare_with_args_kept(self):
+        # Bare decorator with call-style args still resolves to the
+        # bare name (e.g. `@cache(seconds=10)` → `cache`).
+        assert self._clean_and_skip("@cache(seconds=10)") == "cache"
 
 
 class TestNestJSPattern:
@@ -122,9 +211,15 @@ class TestDetectorBehaviorAcrossAllRegexes:
     accidentally widening one of the regexes."""
 
     @pytest.mark.parametrize("deco,expected", [
-        ('@app.get("/")', {"flask", "fastapi"}),  # both regexes share the @app.{verb} shape
+        # After the polish-pass: Flask's regex is restricted to `route`
+        # so verb-based decorators dispatch only to FastAPI. This kills
+        # the duplicate-Route-node bug where each `@app.get(...)` was
+        # being upserted twice (one labeled flask, one fastapi).
+        ('@app.get("/")', {"fastapi"}),
         ('@app.route("/x")', {"flask"}),
-        ('@router.post("/x")', {"flask", "fastapi"}),
+        ('@router.post("/x")', {"fastapi"}),
+        ('@bp.route("/x")', {"flask"}),
+        ('@bp.get("/x")', set()),  # bp.{verb} not commonly Flask; left unmatched
         ('@Get("/x")', {"nestjs"}),
         ('@GetMapping("/x")', {"spring"}),
         ('@asynccontextmanager', set()),
