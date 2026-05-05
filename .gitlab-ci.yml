@@ -571,6 +571,18 @@ test-knowledge-pipeline:
   rules:
     - if: '$RUN_TEST == "knowledge-pipeline"'
 
+test-gitnexus-parity:
+  extends: .test-base
+  variables:
+    PHOENIX_PROJECT_NAME: "gitnexus-parity"
+  script:
+    - python -m pytest tests/integration/test_gitnexus_parity.py -v --tb=short --with-judge --junitxml=report-gitnexus-parity.xml
+  environment:
+    name: test/integration/gitnexus-parity
+    deployment_tier: testing
+  rules:
+    - if: '$RUN_TEST == "gitnexus-parity"'
+
 test-routing-edge-cases:
   extends: .test-base
   variables:
