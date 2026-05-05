@@ -44,6 +44,7 @@ CODER = Rubric(
         "bonus.no_error",
         "bonus.no_refusal",
         "bonus.coherent",
+        "bonus.route_match",
     ),
     required=(
         "Y1.task_completion",
@@ -73,6 +74,7 @@ SEARCH = Rubric(
         "bonus.no_error",
         "bonus.no_refusal",
         "bonus.coherent",
+        "bonus.route_match",
     ),
     required=(
         "Y1.task_completion",
@@ -100,6 +102,7 @@ USER = Rubric(
         "bonus.no_error",
         "bonus.user_identified",
         "bonus.coherent",
+        "bonus.route_match",
     ),
     required=(
         "Y1.task_completion",
@@ -128,6 +131,7 @@ INFRA = Rubric(
         "bonus.no_error",
         "bonus.no_refusal",
         "bonus.coherent",
+        "bonus.route_match",
     ),
     required=(
         "Y1.task_completion",
@@ -155,6 +159,7 @@ PLANNER = Rubric(
         "bonus.not_empty",
         "bonus.no_error",
         "bonus.coherent",
+        "bonus.route_match",
     ),
     required=(
         "Y1.task_completion",

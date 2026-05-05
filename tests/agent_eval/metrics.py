@@ -350,6 +350,35 @@ def bonus_no_self_repetition(target, ctx=None):
     )
 
 
+@register_metric("bonus.route_match")
+def bonus_route_match(target, ctx=None):
+    """Compare expected_route (from corpus task spec, passed via
+    ctx["expected_route"]) to the route the request actually took
+    (from target.metadata["route"]). Phase 3.6 surface for the Phase
+    3.4 corpus's route_matches success criterion.
+
+    Skipped if no expected_route is in ctx — generic rubric runs
+    that don't carry corpus context shouldn't fail this metric.
+    """
+    expected = (ctx or {}).get("expected_route")
+    if not expected:
+        return MetricResult(
+            name="bonus.route_match",
+            value=None,
+            passed=True,
+            details=(("skipped", True), ("reason", "no expected_route in ctx")),
+        )
+    actual = (getattr(target, "metadata", {}) or {}).get("route") or "<none>"
+    passed = (actual == expected)
+    return MetricResult(
+        name="bonus.route_match",
+        value=actual,
+        threshold=expected,
+        passed=passed,
+        details=(("expected", expected), ("actual", actual)),
+    )
+
+
 # Public list of all registered names — useful for diagnostics + tests.
 ALL_METRIC_NAMES: tuple[str, ...] = (
     "Y1.task_completion",
@@ -367,6 +396,7 @@ ALL_METRIC_NAMES: tuple[str, ...] = (
     "bonus.user_identified",
     "bonus.code_present",
     "bonus.no_self_repetition",
+    "bonus.route_match",
 )
 
 
@@ -409,6 +439,7 @@ def ensure_registered() -> None:
         "bonus.user_identified": bonus_user_identified,
         "bonus.code_present": bonus_code_present,
         "bonus.no_self_repetition": bonus_no_self_repetition,
+        "bonus.route_match": bonus_route_match,
     }
     from confucius.core.quality.metric import _METRICS as _registry
     for name, wrapped in bindings.items():

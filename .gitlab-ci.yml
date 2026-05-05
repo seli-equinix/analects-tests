@@ -269,6 +269,14 @@ test-corpus-load:
   rules:
     - if: '$RUN_TEST == "corpus-load"'
 
+# Phase 3.6 — agent eval runner (replay scoring + LIVE_SUMMARY emit)
+test-runner:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_runner.py -v --tb=short --junitxml=report-runner.xml
+  rules:
+    - if: '$RUN_TEST == "runner"'
+
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
 # ════════════════════════════════════════════

@@ -137,8 +137,16 @@ class CorpusValidationError(ValueError):
 def load_corpus(
     cohorts_path: Path | str | None = None,
     tasks_path: Path | str | None = None,
+    *,
+    min_per_cohort: int = 5,
+    min_total: int = 30,
 ) -> Corpus:
     """Load and validate the cohort + task definitions.
+
+    Cardinality bounds default to the Phase 3.4 contract (≥5 per cohort,
+    ≥30 total). Tests with synthetic corpora pass ``min_per_cohort=0`` /
+    ``min_total=0`` to skip the size checks while keeping every other
+    contract (orphan tasks, unknown routes, broken cross-references).
 
     Raises ``CorpusValidationError`` if any contract is violated.
     """
@@ -167,17 +175,19 @@ def load_corpus(
                 )
 
     # Cardinality
-    for cohort_name, cohort in cohorts.items():
-        if cohort.size < 5:
+    if min_per_cohort > 0:
+        for cohort_name, cohort in cohorts.items():
+            if cohort.size < min_per_cohort:
+                errors.append(
+                    f"cohort {cohort_name!r} has {cohort.size} items "
+                    f"(<{min_per_cohort}) — bump it back up before approval"
+                )
+    if min_total > 0:
+        total_items = sum(c.size for c in cohorts.values())
+        if total_items < min_total:
             errors.append(
-                f"cohort {cohort_name!r} has {cohort.size} items "
-                f"(<5) — bump it back up before approval"
+                f"corpus total is {total_items} (<{min_total}) — Phase 3.4 contract requires ≥{min_total}"
             )
-    total_items = sum(c.size for c in cohorts.values())
-    if total_items < 30:
-        errors.append(
-            f"corpus total is {total_items} (<30) — Phase 3.4 contract requires ≥30"
-        )
 
     # Orphan tasks: task spec exists but no cohort references it
     cohort_items = {item for c in cohorts.values() for item in c.items}
