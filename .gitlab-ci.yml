@@ -293,6 +293,14 @@ test-eval-determinism:
   rules:
     - if: '$RUN_TEST == "eval-determinism"'
 
+# Phase 4 — ContextBundle assembly + hashing + validation
+test-bundle:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_bundle.py -v --tb=short --junitxml=report-bundle.xml
+  rules:
+    - if: '$RUN_TEST == "bundle"'
+
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
 # ════════════════════════════════════════════
