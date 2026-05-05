@@ -301,6 +301,14 @@ test-bundle:
   rules:
     - if: '$RUN_TEST == "bundle"'
 
+# Routes-phase decorator regexes (fastapi/flask/nestjs/spring multi-line decorators)
+test-route-detector:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_route_detector.py -v --tb=short --junitxml=report-route-detector.xml
+  rules:
+    - if: '$RUN_TEST == "route-detector"'
+
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
 # ════════════════════════════════════════════
