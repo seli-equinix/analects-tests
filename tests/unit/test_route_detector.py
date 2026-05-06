@@ -13,6 +13,9 @@ detection back to zero.
 """
 from __future__ import annotations
 
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from confucius.server.code_intelligence.pipeline.phases.routes import (
@@ -22,6 +25,7 @@ from confucius.server.code_intelligence.pipeline.phases.routes import (
     FLASK_PATTERN,
     NESTJS_PATTERN,
     SPRING_PATTERN,
+    _delete_orphan_routes,
 )
 
 
@@ -236,3 +240,91 @@ class TestDetectorBehaviorAcrossAllRegexes:
             if pat.search(deco):
                 hits.add(name)
         assert hits == expected, f"{deco!r} → {hits} (expected {expected})"
+
+
+# ── Orphan Route cleanup ────────────────────────────────────────────
+
+
+class TestDeleteOrphanRoutes:
+    """Cleanup pre-pass that runs at the start of RoutesPhase. Removes
+    Route nodes for the project that have no inbound HANDLES_ROUTE edge
+    — these accumulate when the detector's emitted tuple shape changes
+    for the same source code (verb extracted from `methods=[...]`,
+    framework label narrowed by Polish #1, etc.).
+
+    All three tests mock the async session boundary; we don't need a
+    live Memgraph because the helper is pure orchestration over two
+    Cypher queries."""
+
+    @staticmethod
+    def _make_session(count_value, single_returns_none=False):
+        """Build a session mock whose first session.run returns a
+        result whose .single() returns {n: count_value}, and whose
+        second session.run is a no-op AsyncMock."""
+        session = AsyncMock()
+        count_record: Any
+        if single_returns_none:
+            count_record = None
+        else:
+            count_record = MagicMock()
+            count_record.__getitem__ = lambda self, k: (
+                count_value if k == "n" else None
+            )
+        count_result = MagicMock()
+        count_result.single = AsyncMock(return_value=count_record)
+        delete_result = MagicMock()
+        # First call → count_result, subsequent calls → delete_result
+        session.run = AsyncMock(side_effect=[count_result, delete_result])
+        return session
+
+    @pytest.mark.asyncio
+    async def test_deletes_when_orphans_exist(self):
+        """Orphans found → returns the count and issues a DELETE roundtrip."""
+        session = self._make_session(count_value=5)
+        n = await _delete_orphan_routes(session, project="EVA")
+        assert n == 5
+        assert session.run.call_count == 2  # count + delete
+        # Second call's first arg (Cypher text) must contain DETACH DELETE
+        delete_call_query = session.run.call_args_list[1].args[0]
+        assert "DETACH DELETE r" in delete_call_query
+        assert "project" in session.run.call_args_list[1].kwargs
+
+    @pytest.mark.asyncio
+    async def test_skips_delete_when_zero_orphans(self):
+        """Zero orphans → returns 0 and skips the DELETE roundtrip
+        entirely (no point spending a query on an empty MATCH)."""
+        session = AsyncMock()
+        count_record = MagicMock()
+        count_record.__getitem__ = lambda self, k: 0 if k == "n" else None
+        count_result = MagicMock()
+        count_result.single = AsyncMock(return_value=count_record)
+        session.run = AsyncMock(return_value=count_result)
+
+        n = await _delete_orphan_routes(session, project="fastapi_user_app")
+        assert n == 0
+        assert session.run.call_count == 1  # only the count query
+
+    @pytest.mark.asyncio
+    async def test_handles_missing_count_record(self):
+        """Defensive — if session.single() returns None (shouldn't
+        happen in practice but possible if the count query is malformed
+        or Memgraph is in a weird state), helper degrades to 0 instead
+        of crashing the whole routes phase."""
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.single = AsyncMock(return_value=None)
+        session.run = AsyncMock(return_value=count_result)
+
+        n = await _delete_orphan_routes(session, project="EVA")
+        assert n == 0
+        assert session.run.call_count == 1  # count only, no delete
+
+    @pytest.mark.asyncio
+    async def test_project_scoped(self):
+        """Cleanup is project-scoped — the parameter dict must carry
+        the project so other projects' orphans aren't touched."""
+        session = self._make_session(count_value=3)
+        await _delete_orphan_routes(session, project="EVA_migration")
+        # Both calls (count + delete) pass project="EVA_migration"
+        for call in session.run.call_args_list:
+            assert call.kwargs.get("project") == "EVA_migration"
