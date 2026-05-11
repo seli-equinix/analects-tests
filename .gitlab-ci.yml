@@ -99,8 +99,16 @@ build-test-image:
   image: docker:latest
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
+  # Auth comes from the project's DOCKER_AUTH_CONFIG CI/CD variable
+  # (admin:Loveme-sex64 for 192.168.4.204:5000). Older versions of this
+  # job ran `docker login -u admin -p ${REGISTRY_PASS} 192.168.4.204:5000`
+  # first, but REGISTRY_PASS was never defined — so the IP collapsed
+  # into the password arg, the server defaulted to Docker Hub, and the
+  # job failed with `Error response from daemon: Get
+  # https://registry-1.docker.io/v2/: unauthorized`. The explicit
+  # login was always redundant: DOCKER_AUTH_CONFIG handles auth for
+  # both build (pulls) and push transparently. Removed.
   script:
-    - docker login -u ${REGISTRY_USER:-admin} -p ${REGISTRY_PASS} 192.168.4.204:5000
     - docker build -t 192.168.4.204:5000/cca-tests/test-runner:latest -f Dockerfile.test .
     - docker push 192.168.4.204:5000/cca-tests/test-runner:latest
   rules:
