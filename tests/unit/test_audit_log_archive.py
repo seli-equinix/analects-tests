@@ -22,7 +22,7 @@ pytestmark = pytest.mark.django_db
 def seeded_audit_log():
     """Insert 6 ConfigAuditLog rows: 3 older than 90d, 3 newer."""
     from django.utils import timezone
-    from cca_web.ui.models import ConfigAuditLog
+    from ui.models import ConfigAuditLog
     now = timezone.now()
     ConfigAuditLog.objects.all().delete()  # clean slate
     for i, age_days in enumerate([200, 150, 100, 30, 10, 1]):

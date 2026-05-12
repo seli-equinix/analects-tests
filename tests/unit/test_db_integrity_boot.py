@@ -59,6 +59,7 @@ def corrupt_db(tmp_path):
     yield str(db)
 
 
+@pytest.mark.django_db
 def test_check_db_integrity_passes_on_healthy_db(healthy_db, monkeypatch):
     """Reach into UiConfig and call _check_db_integrity against a
     healthy DB; should return None silently."""
@@ -84,13 +85,14 @@ def test_check_db_integrity_skipped_via_env(monkeypatch):
     minimal)."""
     pytest.importorskip("django")
     monkeypatch.setenv("CCA_SKIP_DB_INTEGRITY_CHECK", "1")
-    from cca_web.ui.apps import UiConfig
+    from ui.apps import UiConfig
     # Skip behavior is loud (logger.info "DB integrity check skipped");
     # the assertion is just that it doesn't raise even without a DB
     # connection.
     UiConfig._check_db_integrity()
 
 
+@pytest.mark.django_db
 def test_check_db_integrity_raises_on_corrupt_db(corrupt_db, monkeypatch):
     """A SQLite with a stomped header must produce a non-`ok` integrity
     response and trigger ImproperlyConfigured. This is the failure mode
