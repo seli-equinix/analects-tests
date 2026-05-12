@@ -190,6 +190,21 @@ unit-tests:
       junit: "report-*.xml"
     expire_in: 30 days
   timeout: 5m
+  # Mirror `.test-base`'s JUnit upload so the dashboard sees per-run
+  # results for unit tests too. Without this, a green per-test unit
+  # pipeline leaves the dashboard row stuck at NEVER (the bucket job
+  # doesn't post per-test rows; only RUN_TEST-gated jobs do).
+  after_script:
+    - |
+      CCA_URL="${CCA_BASE_URL:-https://192.168.4.205:8500}"
+      AUTH=""
+      [ -n "$CCA_TEST_API_KEY" ] && AUTH="-H \"Authorization: Bearer $CCA_TEST_API_KEY\""
+      JUNIT_FILE="report-${RUN_TEST}.xml"
+      if [ -f "$JUNIT_FILE" ]; then
+        eval curl -4sf -X POST "$CCA_URL/admin/upload-report" $AUTH \
+          -F pipeline_id=$CI_PIPELINE_ID -F test_name=$RUN_TEST \
+          -F junit=@${JUNIT_FILE} || echo "WARN: JUnit upload failed"
+      fi
 
 test-context-fingerprint:
   extends: .unit-test-base
