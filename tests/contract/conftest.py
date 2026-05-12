@@ -16,11 +16,49 @@ def require_cca_healthy():
 
 
 @pytest.fixture(autouse=True)
-def trace_test():
-    """No-op override of the parent's Phoenix-wrapping fixture.
-
-    The parent's `trace_test` flushes Phoenix + sleeps 1s per test (~4s
-    total overhead). Contract tests only inspect source code / schemas —
-    no agent involvement — so the trace adds nothing.
+def trace_test(request):
+    """No-op override of the parent's Phoenix-wrapping fixture, BUT keep
+    the per-test-result POST so the dashboard updates from per-test
+    pipelines. See tests/unit/conftest.py for the same rationale.
     """
     yield
+
+    import os, httpx
+    _pipeline_id = os.environ.get("CI_PIPELINE_ID", "")
+    _ci_job = os.environ.get("RUN_TEST", "")
+    if not (_pipeline_id and _ci_job):
+        return
+
+    outcome_str = "PASSED"
+    failure_reason = ""
+    if hasattr(request.node, "rep_call"):
+        outcome_str = request.node.rep_call.outcome.upper()
+        if request.node.rep_call.failed:
+            failure_reason = str(request.node.rep_call.longrepr)[:2000]
+    else:
+        outcome_str = "ERROR"
+
+    cca_url = os.environ.get("CCA_BASE_URL", "https://192.168.4.205:8500")
+    api_key = os.environ.get("CCA_TEST_API_KEY", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    node_id = f"other::{request.node.name}".replace("::", "-")
+    try:
+        httpx.post(
+            f"{cca_url}/admin/test-result",
+            json={
+                "ci_job_name": _ci_job,
+                "pipeline_id": _pipeline_id,
+                "node_id": node_id,
+                "status": outcome_str,
+                "duration_ms": 0,
+                "route": "",
+                "failure_reason": failure_reason[:500],
+                "tool_iterations": 0,
+                "turns": 0,
+            },
+            headers=headers,
+            timeout=10,
+            verify=False,
+        )
+    except Exception:
+        pass
