@@ -19,3 +19,19 @@ arize-phoenix-evals>=2.0.0
 arize-phoenix-client>=1.0.0
 openai>=1.0.0
 pandas>=2.0.0
+# langchain_core is imported at module top in confucius/core/analect/analect.py
+# (from langchain_core.callbacks.manager import …). ANY test that imports from
+# confucius.orchestrator.* transitively loads this and fails collection
+# without it — symptom was unit-tests ERRORS on bash_guardrails,
+# file_edit_normalization, is_degenerate. Production cca runs 0.3.86; pin
+# matches.
+langchain-core>=0.3.86,<0.4.0
+# yaml is imported inside confucius/core/quality/cohort.py:load_cohorts(),
+# pulled in by tests/agent_eval/loaders.py:load_corpus(). Without it,
+# every eval-thresholds / eval-determinism / corpus-load / runner test
+# fails at setup. Production has 6.0.2.
+PyYAML>=6.0.0
+# Required so @pytest.mark.django_db in tests/unit/test_audit_log_archive.py
+# actually creates a per-test DB instead of silently being a no-op marker.
+# Also enables future Django-ORM-touching unit tests (TestRun/TestResult).
+pytest-django>=4.10.0
