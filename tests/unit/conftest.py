@@ -14,3 +14,15 @@ import pytest
 def require_cca_healthy():
     """No-op override of the parent autouse fixture for unit tests."""
     yield
+
+
+@pytest.fixture(autouse=True)
+def trace_test():
+    """No-op override of the parent's Phoenix-wrapping fixture.
+
+    The parent's `trace_test` does `provider.force_flush()` + `time.sleep(1)`
+    after every test plus the gRPC export round-trip — ~4s per test. Unit
+    tests don't run agent loops and don't need traces; skipping the fixture
+    cuts the unit-tests bucket from ~18min back under 1min.
+    """
+    yield

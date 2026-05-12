@@ -13,3 +13,14 @@ import pytest
 def require_cca_healthy():
     """No-op override of the parent autouse fixture for contract tests."""
     yield
+
+
+@pytest.fixture(autouse=True)
+def trace_test():
+    """No-op override of the parent's Phoenix-wrapping fixture.
+
+    The parent's `trace_test` flushes Phoenix + sleeps 1s per test (~4s
+    total overhead). Contract tests only inspect source code / schemas —
+    no agent involvement — so the trace adds nothing.
+    """
+    yield
