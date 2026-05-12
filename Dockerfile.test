@@ -1,5 +1,12 @@
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl sshpass openssh-client && rm -rf /var/lib/apt/lists/*
+# Install BOTH production runtime deps and test deps. Without the prod
+# deps, any test that imports from confucius.core.* / confucius.orchestrator.*
+# fails collection on transitive module-top imports (plotly, boto3,
+# langchain_core, fastapi, etc.). Whack-a-mole on individual deps in
+# requirements-test.txt was costing a build cycle per missing module;
+# installing the prod set in one shot stops that.
+COPY requirements.txt /tmp/requirements.txt
 COPY requirements-test.txt /tmp/requirements-test.txt
-RUN pip install --no-cache-dir -r /tmp/requirements-test.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt -r /tmp/requirements-test.txt
 WORKDIR /app
