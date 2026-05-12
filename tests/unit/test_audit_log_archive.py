@@ -47,7 +47,7 @@ def seeded_audit_log():
 
 
 def test_dry_run_reports_count_without_writing(seeded_audit_log):
-    from cca_web.ui.models import ConfigAuditLog, ConfigAuditLogArchive
+    from ui.models import ConfigAuditLog, ConfigAuditLogArchive
     from django.core.management import call_command
 
     out = StringIO()
@@ -64,7 +64,7 @@ def test_dry_run_reports_count_without_writing(seeded_audit_log):
 
 
 def test_archive_moves_old_rows(seeded_audit_log):
-    from cca_web.ui.models import ConfigAuditLog, ConfigAuditLogArchive
+    from ui.models import ConfigAuditLog, ConfigAuditLogArchive
     from django.core.management import call_command
 
     call_command("archive_audit_log", "--days", "90", stdout=StringIO())
@@ -81,7 +81,7 @@ def test_archive_moves_old_rows(seeded_audit_log):
 def test_archive_is_idempotent(seeded_audit_log):
     """Running again immediately should be a no-op (nothing newly aged
     past the cutoff)."""
-    from cca_web.ui.models import ConfigAuditLog, ConfigAuditLogArchive
+    from ui.models import ConfigAuditLog, ConfigAuditLogArchive
     from django.core.management import call_command
 
     call_command("archive_audit_log", "--days", "90", stdout=StringIO())
@@ -98,7 +98,7 @@ def test_zero_days_archives_everything(seeded_audit_log):
     that's older than NOW (which is all of them, modulo the
     sub-second-aged ones, but our fixture sets all timestamps in the
     past)."""
-    from cca_web.ui.models import ConfigAuditLog, ConfigAuditLogArchive
+    from ui.models import ConfigAuditLog, ConfigAuditLogArchive
     from django.core.management import call_command
 
     call_command("archive_audit_log", "--days", "0", stdout=StringIO())

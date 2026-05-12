@@ -70,7 +70,7 @@ def test_check_db_integrity_passes_on_healthy_db(healthy_db, monkeypatch):
     try:
         connection.close()
         connection.settings_dict["NAME"] = healthy_db
-        from cca_web.ui.apps import UiConfig
+        from ui.apps import UiConfig
         UiConfig._check_db_integrity()  # must not raise
     finally:
         connection.close()
@@ -103,7 +103,7 @@ def test_check_db_integrity_raises_on_corrupt_db(corrupt_db, monkeypatch):
     try:
         connection.close()
         connection.settings_dict["NAME"] = corrupt_db
-        from cca_web.ui.apps import UiConfig
+        from ui.apps import UiConfig
         with pytest.raises(ImproperlyConfigured) as exc:
             UiConfig._check_db_integrity()
         # Must mention either integrity_check or foreign_key_check so
