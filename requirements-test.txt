@@ -35,3 +35,10 @@ PyYAML>=6.0.0
 # actually creates a per-test DB instead of silently being a no-op marker.
 # Also enables future Django-ORM-touching unit tests (TestRun/TestResult).
 pytest-django>=4.10.0
+# plotly is imported at module top in confucius/core/io/base.py
+# (`import plotly.graph_objs as go`). ANY test that imports from
+# confucius.orchestrator.* transitively loads core/io/base.py and fails
+# collection without it — symptom was unit-tests ERRORS on bash_guardrails,
+# file_edit_normalization, is_degenerate after the langchain-core fix.
+# Production cca runs 6.2.0.
+plotly>=6.2.0
