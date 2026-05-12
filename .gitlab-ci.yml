@@ -340,6 +340,62 @@ test-route-detector:
   rules:
     - if: '$RUN_TEST == "route-detector"'
 
+# Phase 4 (Invariant 2) — assert no system prompt strings are hardcoded in source
+test-lifted-system-prompts:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_lifted_system_prompts.py -v --tb=short --junitxml=report-lifted-system-prompts.xml
+  rules:
+    - if: '$RUN_TEST == "lifted-system-prompts"'
+
+# Phase 4 (Invariant 9) — ConfigAuditLog bounded growth via archive command
+test-audit-log-archive:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_audit_log_archive.py -v --tb=short --junitxml=report-audit-log-archive.xml
+  rules:
+    - if: '$RUN_TEST == "audit-log-archive"'
+
+# Phase 4 (Invariant 10) — PRAGMA integrity_check fires on container boot
+test-db-integrity-boot:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_db_integrity_boot.py -v --tb=short --junitxml=report-db-integrity-boot.xml
+  rules:
+    - if: '$RUN_TEST == "db-integrity-boot"'
+
+# Code intelligence — per-call-site extraction (PowerShell/Python/Bash tree-sitter)
+test-call-site-extraction:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_call_site_extraction.py -v --tb=short --junitxml=report-call-site-extraction.xml
+  rules:
+    - if: '$RUN_TEST == "call-site-extraction"'
+
+# Code intelligence — new WRAPS / decorator-chain / find-routes tools
+test-graph-extension-new-tools:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_graph_extension_new_tools.py -v --tb=short --junitxml=report-graph-extension-new-tools.xml
+  rules:
+    - if: '$RUN_TEST == "graph-extension-new-tools"'
+
+# Code intelligence — atomic clear_file_data transaction (no partial commits on error)
+test-indexer-delete-path:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_indexer_delete_path.py -v --tb=short --junitxml=report-indexer-delete-path.xml
+  rules:
+    - if: '$RUN_TEST == "indexer-delete-path"'
+
+# Code intelligence — atomic Memgraph indexing (file-level rollback on error)
+test-memgraph-atomic-indexing:
+  extends: .unit-test-base
+  script:
+    - python3 -m pytest tests/unit/test_memgraph_atomic_indexing.py -v --tb=short --junitxml=report-memgraph-atomic-indexing.xml
+  rules:
+    - if: '$RUN_TEST == "memgraph-atomic-indexing"'
+
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
 # ════════════════════════════════════════════
