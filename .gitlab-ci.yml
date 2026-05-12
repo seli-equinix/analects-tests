@@ -143,7 +143,10 @@ contract-schema-drift:
     reports:
       junit: "report-*.xml"
     expire_in: 30 days
-  timeout: 5m
+  # Bumped from 5m → 15m alongside the unit-tests bump for the same reason
+  # (full confucius stack now loaded in test-runner). Eval-determinism /
+  # corpus-load tests do real corpus rendering which is also slower.
+  timeout: 15m
 
 # Phase 3.3.5 — unit-test bucket gate. Mirrors contract-schema-drift:
 # runs on every push (no RUN_TEST gate), `allow_failure: false`. Catches
@@ -165,7 +168,12 @@ unit-tests:
     reports:
       junit: "report-*.xml"
     expire_in: 30 days
-  timeout: 5m
+  # Bumped from 5m → 20m after the prod-deps Dockerfile change. The
+  # test-runner now imports the full confucius stack (Phoenix tracing,
+  # Django settings, langchain) so per-test startup is ~4s and the 278
+  # tests would have run ~18 min at that rate. Optimize startup separately
+  # (lazy imports / disable Phoenix in tests / reuse Django DB).
+  timeout: 20m
 
 # Per-test unit + contract jobs (RUN_TEST gated). These let the CCA UI
 # dashboard's per-test Run button trigger a single test the same way it
