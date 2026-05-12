@@ -1,5 +1,13 @@
 FROM python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends curl sshpass openssh-client && rm -rf /var/lib/apt/lists/*
+# Build tools needed to compile tree-sitter language grammars (the call-site
+# extraction unit tests instantiate TreeSitterParser, which dlopen()s
+# /usr/local/lib/tree-sitter-languages.so). Without these, the call-site
+# tests silently return empty results and fail their assertions.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl sshpass openssh-client \
+      git gcc g++ make nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g tree-sitter-cli@0.20.8
 # Install BOTH production runtime deps and test deps. Without the prod
 # deps, any test that imports from confucius.core.* / confucius.orchestrator.*
 # fails collection on transitive module-top imports (plotly, boto3,
@@ -9,4 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl sshpass op
 COPY requirements.txt /tmp/requirements.txt
 COPY requirements-test.txt /tmp/requirements-test.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt -r /tmp/requirements-test.txt
+# Compile tree-sitter language grammars (Python, Bash, PowerShell, YAML,
+# Markdown, JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, PHP, Ruby).
+# Mirrors the same step in the prod Dockerfile so test-runner-loaded
+# parsers behave identically to production.
+COPY confucius/server/code_intelligence/build_languages.py /tmp/build_languages.py
+RUN python3 /tmp/build_languages.py && rm /tmp/build_languages.py
 WORKDIR /app

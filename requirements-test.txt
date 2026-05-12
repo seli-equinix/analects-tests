@@ -42,3 +42,12 @@ pytest-django>=4.10.0
 # file_edit_normalization, is_degenerate after the langchain-core fix.
 # Production cca runs 6.2.0.
 plotly>=6.2.0
+# Django stack — tests/unit/test_db_integrity_boot.py imports
+# cca_web.ui.apps.UiConfig which needs Django + djangorestframework
+# (cca_web.settings.INSTALLED_APPS includes 'rest_framework'). Prod
+# installs these via a separate `pip install` block in Dockerfile, not
+# requirements.txt — replicate here so the test-runner can boot Django.
+django>=5.1
+djangorestframework>=3.15
+whitenoise>=6.7
+tomli_w>=1.0
