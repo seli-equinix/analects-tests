@@ -27,7 +27,12 @@ from tests.evaluators import evaluate_response
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
-BASE_URL = os.environ.get("CCA_URL", "http://localhost:8500")
+# Match the env-var name + default used by every other test in the repo
+# (tests/conftest.py:45, tests/knowledge/conftest.py:11, tests/cca_client.py:138).
+# Previously read CCA_URL with a bogus http://localhost:8500 default — that's
+# why every fixture call in this module hit RemoteProtocolError; the test
+# was talking to its own test-runner loopback, not CCA.
+BASE_URL = os.environ.get("CCA_BASE_URL", "https://192.168.4.205:8500")
 ADMIN_KEY = os.environ.get("CCA_ADMIN_API_KEY", "")
 
 

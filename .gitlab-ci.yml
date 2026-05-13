@@ -51,6 +51,11 @@ variables:
   needs: [health-check]
   resource_group: cca-llm
   # No hard timeout — SSE idle timeout (120s) + circuit breaker are the real watchdogs
+  variables:
+    # Alias for legacy test code that reads CCA_URL rather than CCA_BASE_URL.
+    # Belt-and-suspenders alongside fixing each test to use the canonical
+    # CCA_BASE_URL name.
+    CCA_URL: "$CCA_BASE_URL"
   artifacts:
     when: always
     paths:

@@ -56,15 +56,21 @@ class TestCodeTrace:
             f"Response: {r1.content[:200]}"
         )
 
-        # Should have used trace_execution, search_codebase, or query_call_graph
+        # Should have used a code-intelligence tool. The list mirrors what
+        # the indexer's three extensions register (trace_extension +
+        # search_extension + graph_extension) — when a new tool is added
+        # under confucius/server/code_intelligence/ it belongs here too.
         tool_names_1 = r1.tool_names
         trace_test.set_attribute("cca.test.t1_tools", str(tool_names_1))
+        _code_intel_tools = {
+            "trace_execution", "search_codebase",
+            "query_call_graph", "search_knowledge",
+            "get_symbol_context", "get_function_flow",
+            "analyze_impact", "get_call_chain", "get_decorator_chain",
+            "find_routes", "browse_project", "list_projects",
+        }
         used_code_tools = any(
-            t in name for name in tool_names_1
-            for t in [
-                "trace_execution", "search_codebase",
-                "query_call_graph", "search_knowledge",
-            ]
+            t in _code_intel_tools for t in tool_names_1
         )
         assert used_code_tools, (
             f"Agent didn't use code intelligence tools. Called: {tool_names_1}"
