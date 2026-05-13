@@ -284,6 +284,17 @@ class CCAClient:
         # not the test span — so we must save the reference here.
         test_span = trace.get_current_span()
 
+        # Promote the test root span to LLM kind as soon as the test
+        # makes its first chat call. Phoenix then renders the test trace
+        # with its chat-conversation panel (per-turn user/assistant
+        # blocks) instead of the flat CHAIN/code panel. Idempotent —
+        # safe to overwrite per turn; the multi-turn branch in
+        # conftest.py:trace_test overwrites with the same value.
+        try:
+            test_span.set_attribute("openinference.span.kind", "LLM")
+        except Exception:
+            pass  # test_span may be a NoOp span if pytest fixture is absent
+
         # Track turn number per session for Phoenix labeling
         turn = self._session_turns.get(session_id, 0) + 1
         self._session_turns[session_id] = turn
@@ -461,13 +472,19 @@ class CCAClient:
 
         # Build headers with W3C trace context propagation.
         # inject() adds traceparent so server spans become children of this
-        # test trace — unified view in Phoenix (one trace per test).
+        # test trace — unified view in Phoenix (one trace per test, one
+        # project per trace).
+        #
+        # NOTE: we no longer send X-Phoenix-Project. The server inherits
+        # the project from the parent trace context (carried by
+        # traceparent). Forcing the server into a per-test project here
+        # caused the test span and server spans to land in different
+        # Phoenix projects — a single click "open trace" then only showed
+        # half the hierarchy.
         # Authorization header is set as default on self._client — no per-call addition needed
         headers: Dict[str, str] = {"X-Session-Id": session_id}
         if user_id:
             headers["X-User-Id"] = user_id
-        if self.project_name:
-            headers["X-Phoenix-Project"] = self.project_name
         inject(headers)  # adds traceparent header
 
         try:
@@ -947,9 +964,22 @@ class TestResourceTracker:
             self._user_names.append(name)
 
     def track_session(self, session_id: str) -> None:
-        """Register a session ID created by this test."""
+        """Register a session ID created by this test.
+
+        Mirrors the list into the current test span's _test_metrics so
+        conftest._post_test_result can read primary_session_id (first
+        tracked session) without reaching into TestRunContext internals.
+        """
         if session_id not in self._session_ids:
             self._session_ids.append(session_id)
+        try:
+            current = trace.get_current_span()
+            if current and hasattr(current, "_test_metrics"):
+                lst = current._test_metrics.setdefault("_session_ids", [])
+                if session_id not in lst:
+                    lst.append(session_id)
+        except Exception:
+            pass  # not under a test span — fine
 
     def track_workspace_prefix(self, prefix: str) -> None:
         """Register a workspace file prefix for cleanup."""
@@ -1036,9 +1066,22 @@ class TestRunContext:
             self._user_ids.append(user_id)
 
     def track_session(self, session_id: str) -> None:
-        """Register a session ID created by this test."""
+        """Register a session ID created by this test.
+
+        Mirrors the list into the current test span's _test_metrics so
+        conftest._post_test_result can read primary_session_id (first
+        tracked session) without reaching into TestRunContext internals.
+        """
         if session_id not in self._session_ids:
             self._session_ids.append(session_id)
+        try:
+            current = trace.get_current_span()
+            if current and hasattr(current, "_test_metrics"):
+                lst = current._test_metrics.setdefault("_session_ids", [])
+                if session_id not in lst:
+                    lst.append(session_id)
+        except Exception:
+            pass  # not under a test span — fine
 
     def track_workspace_prefix(self, prefix: str) -> None:
         """Register a workspace file prefix created by this test."""
@@ -1079,6 +1122,11 @@ class TestRunContext:
             if not any(name.lower() in (uid or "").lower() for uid in self._user_ids):
                 self.resolve_user_id(name)
 
+        # phoenix_project must match what the spans actually went to —
+        # PHOENIX_PROJECT_NAME (env, typically "cca-http") since we no
+        # longer force per-test projects via X-Phoenix-Project header.
+        # Reading os.environ here is correct: the GitLab job sets it.
+        _phoenix_project = os.environ.get("PHOENIX_PROJECT_NAME", "cca-http")
         manifest = {
             "test_name": self._test_name,
             "pipeline_id": self._pipeline_id,
@@ -1090,22 +1138,52 @@ class TestRunContext:
             "user_names": self._user_names,
             "session_ids": self._session_ids,
             "workspace_prefixes": self._workspace_prefixes,
-            "phoenix_project": f"test/{self._test_name}",
+            "phoenix_project": _phoenix_project,
             "report_folder": f"P{self._pipeline_id}_{self._test_name}",
             "finished_at": datetime.utcnow().isoformat(),
         }
 
+        # Import path: `tests.report_generator` because that's the
+        # package layout (pyproject.toml + container WORKDIR `/app` has
+        # `/app/tests/`). The bare `from report_generator import REPORTS_DIR`
+        # used to fail silently — that's why 0/119 reports on the NFS
+        # mount had a manifest.json. Now we try both layouts and log
+        # the import error at WARNING (not silently swallow).
         try:
-            from report_generator import REPORTS_DIR
+            try:
+                from tests.report_generator import REPORTS_DIR
+            except ImportError:
+                from report_generator import REPORTS_DIR  # fallback for old layout
+        except ImportError as e:
+            log.warning(
+                "Failed to import REPORTS_DIR for manifest.json — "
+                "manifest will NOT be written. Error: %s. "
+                "Fix: ensure tests/ is importable on PYTHONPATH.",
+                e,
+            )
+            return
+
+        try:
             folder = REPORTS_DIR / f"P{self._pipeline_id}_{self._test_name}"
             folder.mkdir(parents=True, exist_ok=True)
             (folder / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, default=str)
             )
-            log.info("Wrote manifest: %s (%d users, %d sessions)",
-                     folder.name, len(self._user_ids), len(self._session_ids))
-        except Exception as e:
-            log.warning("Failed to write manifest: %s", e)
+            log.info(
+                "Wrote manifest: %s (%d users, %d sessions, phoenix_project=%s)",
+                folder, len(self._user_ids), len(self._session_ids),
+                _phoenix_project,
+            )
+        except OSError as e:
+            # Permission denied / directory missing — log as ERROR so
+            # CI surfaces it. Don't re-raise: test result itself still
+            # gets posted by conftest._post_test_result.
+            log.error(
+                "Failed to write manifest at %s: %s. "
+                "Check that REPORTS_DIR (%s) is bind-mounted writable "
+                "in the test container.",
+                folder, e, REPORTS_DIR,
+            )
 
     @staticmethod
     def _normalize_name(node_name: str) -> str:

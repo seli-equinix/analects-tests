@@ -20,12 +20,18 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-# In CI: write to /reports (volume-mounted to host tests/reports/)
-# Locally: write to tests/reports/ relative to this file
-if os.environ.get("CI"):
-    REPORTS_DIR = Path("reports")
-else:
-    REPORTS_DIR = Path(__file__).parent / "reports"
+# REPORTS_DIR must match what the dashboard reads from
+# (cca_web/ui/views/reports.py:19 — defaults to /app/reports). The
+# dashboard and the test generator both consult the same CCA_REPORTS_PATH
+# env var so manifests + report.md land in one place that the dashboard
+# can find.
+# CI containers bind-mount /app/reports → /mnt/cca-reports on the host so
+# reports persist across runs.
+_default_reports = (
+    "/app/reports" if os.environ.get("CI") or os.path.isdir("/app")
+    else str(Path(__file__).parent / "reports")
+)
+REPORTS_DIR = Path(os.environ.get("CCA_REPORTS_PATH", _default_reports))
 
 # Pipeline ID from GitLab CI — used to match reports to dashboard runs
 PIPELINE_ID = os.environ.get("CI_PIPELINE_ID", "local")

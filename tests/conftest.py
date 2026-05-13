@@ -111,12 +111,18 @@ def phoenix_tracer(phoenix_provider):
 
 def _post_test_result(cca_url: str, headers: dict, ci_job: str,
                       pipeline_id: str, node_id: str, status: str,
-                      metrics: dict, failure_reason: str):
+                      metrics: dict, failure_reason: str,
+                      trace_id: str = "", primary_session_id: str = "",
+                      phoenix_project: str = ""):
     """Post individual test result to CCA DB. Fire-and-forget.
 
     Called in CI mode only (when CI_PIPELINE_ID and RUN_TEST are set).
     The /admin/test-result endpoint upserts the result and recomputes
     TestDefinition aggregate status (FAILED if ANY individual test failed).
+
+    trace_id / primary_session_id / phoenix_project carry the Phoenix
+    linkage so the dashboard can deep-link each TestResult to its
+    exact Phoenix trace (instead of guessing a project URL by name).
     """
     try:
         import httpx as _httpx
@@ -132,9 +138,13 @@ def _post_test_result(cca_url: str, headers: dict, ci_job: str,
                 "failure_reason": (failure_reason or "")[:500],
                 "tool_iterations": metrics.get("tool_iterations", 0),
                 "turns": len(metrics.get("_turns", [])),
+                "trace_id": trace_id,
+                "primary_session_id": primary_session_id,
+                "phoenix_project": phoenix_project,
             },
             headers=headers,
             timeout=10,
+            verify=False,  # internal CCA HTTPS cert is self-signed
         )
     except Exception as e:
         log.warning("Failed to post test result: %s", e)
@@ -180,48 +190,47 @@ def trace_test(request, phoenix_tracer):
 
         yield span
 
-        # Set I/O attributes from accumulated chat turns (done after yield so
-        # ALL turns are collected before we write).
-        # Single-turn: input.value / output.value as plain text (CHAIN span).
-        # Multi-turn: llm.input_messages / llm.output_messages so Phoenix
-        # renders each turn as its own independent message block (LLM span).
+        # Set I/O attributes from accumulated chat turns (done after yield
+        # so ALL turns are collected before we write).
+        #
+        # cca_client.chat() promotes the root span to LLM kind on first
+        # call, so we always emit llm.input_messages / llm.output_messages
+        # here (both single- and multi-turn) — Phoenix then renders the
+        # chat-conversation panel. The CHAIN default at line 171 stays
+        # in place for tests that never call chat().
         turns = span._test_metrics.get("_turns", [])
         if turns:
-            if len(turns) == 1:
-                span.set_attribute("input.value", turns[0][0])
-                span.set_attribute("output.value", turns[0][1])
-            else:
-                # Switch span kind to LLM so Phoenix uses the chat/conversation
-                # renderer — each message becomes an independent block.
-                span.set_attribute("openinference.span.kind", "LLM")
-                idx = 0
-                for i, (msg, resp) in enumerate(turns):
+            # Idempotent overwrite of the kind set in cca_client.chat()
+            span.set_attribute("openinference.span.kind", "LLM")
+            idx = 0
+            for i, (msg, resp) in enumerate(turns):
+                span.set_attribute(
+                    f"llm.input_messages.{idx}.message.role", "user"
+                )
+                span.set_attribute(
+                    f"llm.input_messages.{idx}.message.content",
+                    f"[Turn {i + 1}] {msg}" if len(turns) > 1 else msg,
+                )
+                idx += 1
+                if i < len(turns) - 1:
+                    # Intermediate assistant responses go into input context
                     span.set_attribute(
-                        f"llm.input_messages.{idx}.message.role", "user"
+                        f"llm.input_messages.{idx}.message.role", "assistant"
                     )
                     span.set_attribute(
                         f"llm.input_messages.{idx}.message.content",
-                        f"[Turn {i + 1}] {msg}",
+                        f"[Turn {i + 1}] {resp}",
                     )
                     idx += 1
-                    if i < len(turns) - 1:
-                        # Intermediate assistant responses go into input context
-                        span.set_attribute(
-                            f"llm.input_messages.{idx}.message.role", "assistant"
-                        )
-                        span.set_attribute(
-                            f"llm.input_messages.{idx}.message.content",
-                            f"[Turn {i + 1}] {resp}",
-                        )
-                        idx += 1
-                # Final assistant response is the output
-                span.set_attribute(
-                    "llm.output_messages.0.message.role", "assistant"
-                )
-                span.set_attribute(
-                    "llm.output_messages.0.message.content",
-                    f"[Turn {len(turns)}] {turns[-1][1]}",
-                )
+            # Final assistant response is the output
+            final_resp = turns[-1][1]
+            span.set_attribute(
+                "llm.output_messages.0.message.role", "assistant"
+            )
+            span.set_attribute(
+                "llm.output_messages.0.message.content",
+                f"[Turn {len(turns)}] {final_resp}" if len(turns) > 1 else final_resp,
+            )
 
         if hasattr(request.node, "rep_call"):
             rep = request.node.rep_call
@@ -290,6 +299,18 @@ def trace_test(request, phoenix_tracer):
         _auth_h = (
             {"Authorization": f"Bearer {_api_key}"} if _api_key else {}
         )
+
+        # Phoenix linkage — extract trace_id from the test root span and
+        # session_id from the first session the test tracked. These let
+        # the dashboard deep-link to the exact Phoenix trace.
+        try:
+            sc = span.get_span_context()
+            _trace_id_hex = f"{sc.trace_id:032x}" if sc and sc.is_valid else ""
+        except Exception:
+            _trace_id_hex = ""
+        _sessions = metrics.get("_session_ids", []) if metrics else []
+        _primary_session = _sessions[0] if _sessions else ""
+
         _post_test_result(
             cca_url=os.environ.get(
                 "CCA_BASE_URL", "https://192.168.4.205:8500"
@@ -297,20 +318,32 @@ def trace_test(request, phoenix_tracer):
             headers=_auth_h,
             ci_job=_ci_job,
             pipeline_id=_pipeline_id,
-            node_id=span_name.replace("::", "-"),
+            node_id=_ci_job,  # use the dash-form RUN_TEST, not the long span_name
             status=outcome_str,
             metrics=metrics,
             failure_reason=failure_reason,
+            trace_id=_trace_id_hex,
+            primary_session_id=_primary_session,
+            phoenix_project=PROJECT_NAME,
         )
 
     # Generate .md test report for Claude Code review (agent tests only —
     # non-agent tests have no transcript/turns/iterations to render).
+    #
+    # IMPORTANT: pass the dash-form short name (RUN_TEST / ci_job) when in
+    # CI so the folder name matches what TestRunContext writes manifest.json
+    # to, and what the dashboard reads (P{pipeline_id}_{ci_job}). Previously
+    # this used span_name.replace("::","-") producing the long form
+    # "user-test_new_user_onboarding" — that created a second parallel
+    # folder the dashboard never looked at.
     if metrics:
         try:
             from tests.report_generator import generate_test_report
 
+            _report_name = _ci_job if _ci_job else span_name.replace("::", "-")
+
             test_dir = generate_test_report(
-                test_name=span_name.replace("::", "-"),
+                test_name=_report_name,
                 status=outcome_str,
                 turns=metrics.get("_turns", []),
                 metrics=metrics,
