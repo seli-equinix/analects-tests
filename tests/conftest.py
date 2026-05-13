@@ -44,18 +44,25 @@ log = logging.getLogger(__name__)
 PHOENIX_ENDPOINT = os.getenv("PHOENIX_COLLECTOR_ENDPOINT", "http://192.168.4.204:4317")
 CCA_BASE_URL = os.getenv("CCA_BASE_URL", "https://192.168.4.205:8500")
 
-# Per-test Phoenix projects. PHOENIX_PROJECT_NAME is the *prefix* — each
-# test gets its own project named "{prefix}/{normalized_test_name}" so
-# the /tests dashboard can deep-link each test row to its own Phoenix
-# project, and retries pile up as separate traces inside the same
-# project (one page per test, run history visible by scrolling).
+# Per-test Phoenix projects. Each test gets its own project named
+# "test/{normalized_test_name}" so the /tests dashboard can deep-link
+# each test row to its own Phoenix project, and retries pile up as
+# separate traces inside the same project (one page per test, run
+# history visible by scrolling).
 #
 # The trace_test fixture below sets this per-test via using_project()
 # and tells the CCAClient to send "X-Phoenix-Project: <test_project>"
 # so the server routes its spans to the same project (full hierarchy
 # in one place: test -> cca.request -> cca.agent -> vLLM).
-PHOENIX_PROJECT_PREFIX = os.getenv("PHOENIX_PROJECT_NAME", "test")
-PROJECT_NAME = PHOENIX_PROJECT_PREFIX  # fallback for the shared TracerProvider Resource
+#
+# PHOENIX_PROJECT_NAME env var is honored only as the fallback project
+# for the shared TracerProvider Resource — used by spans that aren't
+# wrapped in using_project() (session-level setup spans, if any).
+# The .gitlab-ci.yml's per-job PHOENIX_PROJECT_NAME override is ignored
+# for per-test routing; we always derive "test/<bare-name>" from the
+# pytest node so the routing is consistent regardless of CI config.
+PHOENIX_PROJECT_PREFIX = "test"
+PROJECT_NAME = os.getenv("PHOENIX_PROJECT_NAME", "cca-http")
 
 # Phoenix per-scope project override (uses contextvars; propagates
 # through async). Falls back to a no-op if the dependency is missing.
