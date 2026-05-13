@@ -44,8 +44,40 @@ log = logging.getLogger(__name__)
 PHOENIX_ENDPOINT = os.getenv("PHOENIX_COLLECTOR_ENDPOINT", "http://192.168.4.204:4317")
 CCA_BASE_URL = os.getenv("CCA_BASE_URL", "https://192.168.4.205:8500")
 
-# Same Phoenix project as the CCA server — test + server spans unified
-PROJECT_NAME = os.getenv("PHOENIX_PROJECT_NAME", "cca-http")
+# Per-test Phoenix projects. PHOENIX_PROJECT_NAME is the *prefix* — each
+# test gets its own project named "{prefix}/{normalized_test_name}" so
+# the /tests dashboard can deep-link each test row to its own Phoenix
+# project, and retries pile up as separate traces inside the same
+# project (one page per test, run history visible by scrolling).
+#
+# The trace_test fixture below sets this per-test via using_project()
+# and tells the CCAClient to send "X-Phoenix-Project: <test_project>"
+# so the server routes its spans to the same project (full hierarchy
+# in one place: test -> cca.request -> cca.agent -> vLLM).
+PHOENIX_PROJECT_PREFIX = os.getenv("PHOENIX_PROJECT_NAME", "test")
+PROJECT_NAME = PHOENIX_PROJECT_PREFIX  # fallback for the shared TracerProvider Resource
+
+# Phoenix per-scope project override (uses contextvars; propagates
+# through async). Falls back to a no-op if the dependency is missing.
+try:
+    from openinference.instrumentation import dangerously_using_project as _using_project
+except ImportError:
+    from contextlib import nullcontext as _nullctx
+    def _using_project(_name):  # type: ignore[misc]
+        return _nullctx()
+
+
+def _normalize_test_name(node_name: str) -> str:
+    """test_new_user_onboarding -> new-user-onboarding
+
+    Mirrors TestRunContext._normalize_name so Phoenix project names,
+    GitLab RUN_TEST values, TestDefinition.test_name rows, and report
+    folder names all stay in lockstep.
+    """
+    name = node_name.split("::")[-1] if "::" in node_name else node_name
+    if name.startswith("test_"):
+        name = name[5:]
+    return name.replace("_", "-")
 
 # Inter-test cooldown (seconds) to prevent server overload.
 # Each test triggers LLM inference on vLLM — without cooldown,
@@ -151,11 +183,18 @@ def _post_test_result(cca_url: str, headers: dict, ci_job: str,
 
 
 @pytest.fixture(autouse=True)
-def trace_test(request, phoenix_tracer):
+def trace_test(request, phoenix_tracer, cca):
     """Wrap every test in a Phoenix span with test metadata.
 
     Creates a root span like 'websearch::test_basic_search' so tests
     are easy to find and filter in the Phoenix UI.
+
+    Also pins this test's Phoenix project to "test/{normalized_name}" for
+    the duration of the test (both the test-process spans via
+    using_project() and the server-process spans via the
+    X-Phoenix-Project header on the CCAClient). Each test ends up in
+    its own Phoenix project; retries pile up as separate traces inside
+    that project.
 
     Annotations are collected during the test via span._pending_annotations
     and posted AFTER the span closes + flushes — fixing the 404 race.
@@ -177,7 +216,18 @@ def trace_test(request, phoenix_tracer):
     test_name = request.node.name
     span_name = f"{category}::{test_name}"
 
-    with tracer.start_as_current_span(span_name) as span:
+    # Per-test Phoenix project: "test/new-user-onboarding" etc.
+    # This becomes the project for BOTH the local test root span (via
+    # using_project below) AND the server-side spans (via the
+    # X-Phoenix-Project header set on the CCAClient).
+    test_project = f"{PHOENIX_PROJECT_PREFIX}/{_normalize_test_name(test_name)}"
+    _prev_project = cca.project_name
+    cca.project_name = test_project
+    # Restore even if anything below raises (covers errors during span
+    # setup, teardown, or post-test reporting).
+    request.addfinalizer(lambda: setattr(cca, "project_name", _prev_project))
+
+    with _using_project(test_project), tracer.start_as_current_span(span_name) as span:
         span.set_attribute("openinference.span.kind", "CHAIN")
         span.set_attribute("cca.test.name", test_name)
         span.set_attribute("cca.test.category", category)
@@ -324,7 +374,7 @@ def trace_test(request, phoenix_tracer):
             failure_reason=failure_reason,
             trace_id=_trace_id_hex,
             primary_session_id=_primary_session,
-            phoenix_project=PROJECT_NAME,
+            phoenix_project=test_project,
         )
 
     # Generate .md test report for Claude Code review (agent tests only —

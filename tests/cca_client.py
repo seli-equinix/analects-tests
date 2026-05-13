@@ -470,21 +470,34 @@ class CCAClient:
             pool=30.0,
         )
 
-        # Build headers with W3C trace context propagation.
-        # inject() adds traceparent so server spans become children of this
-        # test trace — unified view in Phoenix (one trace per test, one
-        # project per trace).
+        # Build headers with W3C trace context + per-test Phoenix routing.
         #
-        # NOTE: we no longer send X-Phoenix-Project. The server inherits
-        # the project from the parent trace context (carried by
-        # traceparent). Forcing the server into a per-test project here
-        # caused the test span and server spans to land in different
-        # Phoenix projects — a single click "open trace" then only showed
-        # half the hierarchy.
+        # Two orthogonal pieces of routing metadata, both required:
+        #
+        # 1. X-Phoenix-Project: tells the server which Phoenix project to
+        #    write spans into for this request. Without it every span
+        #    lands in the global production project (e.g. "cca-http"),
+        #    which makes per-test history (and the /tests Trace button)
+        #    impossible to surface.
+        #
+        # 2. W3C traceparent (via inject(headers)): tells the server's
+        #    OTel SDK to parent its spans under the test root span, so
+        #    test -> cca.request -> cca.agent -> cca.llm.invoke -> vLLM
+        #    is ONE connected trace.
+        #
+        # These compose. using_project() on the server is a per-scope
+        # project override that does NOT break parent-child links — Phoenix
+        # stores spans of one trace together regardless of project. With
+        # both present, every span of one test run lands in test/{name}
+        # AND the full hierarchy is visible in that single project.
+        #
+        # Do not remove either without understanding the other.
         # Authorization header is set as default on self._client — no per-call addition needed
         headers: Dict[str, str] = {"X-Session-Id": session_id}
         if user_id:
             headers["X-User-Id"] = user_id
+        if self.project_name:
+            headers["X-Phoenix-Project"] = self.project_name
         inject(headers)  # adds traceparent header
 
         try:
