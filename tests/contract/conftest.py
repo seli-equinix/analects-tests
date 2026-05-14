@@ -41,7 +41,9 @@ def trace_test(request):
     cca_url = os.environ.get("CCA_BASE_URL", "https://192.168.4.205:8500")
     api_key = os.environ.get("CCA_TEST_API_KEY", "")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    node_id = f"other::{request.node.name}".replace("::", "-")
+    # node_id = canonical file-stem name (per tests/_naming.py + the doc).
+    from tests._naming import canonical_name
+    node_id = canonical_name(request.node)
     try:
         httpx.post(
             f"{cca_url}/admin/test-result",

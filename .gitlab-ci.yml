@@ -1,19 +1,18 @@
-# CCA Test Pipeline — One test per pipeline, always isolated.
+# CCA Test Pipeline — one test per pipeline, dispatched dynamically.
 #
-# Each test runs in its own pipeline with:
-#   - GitLab environment (deployment history per test)
-#   - Phoenix project (isolated trace history per test)
+# Adding a new test file requires ZERO changes here. Drop a file at
+# tests/<category>/test_<name>.py — the dashboard auto-discovers it,
+# clicking Run triggers a pipeline with RUN_TEST=<name>, the dispatcher
+# below finds the file from $RUN_TEST and runs it. The canonical name
+# `<name>` is derived once by tests/_naming.py:canonical_name (the doc
+# standard, see docs/testing/writing-tests.md).
 #
 # Trigger via Makefile:  make test NAME=eva-code-trace
 # Or via dashboard:      Run / Run All buttons (each test = separate pipeline)
 # Or via API:            POST /pipeline  variables[RUN_TEST]=eva-code-trace
 #
-# RUN_TEST values:
-#   Individual:  eva-code-trace, code-trace, bash-execution, etc.
-#   Build only:  build
-#
-# Group runs (all, all-user, etc.) are handled by the dashboard — it fires
-# one pipeline per test, never groups multiple tests into one pipeline.
+# Special RUN_TEST values:
+#   build  — rebuild test Docker image (no pytest)
 
 stages:
   - build
@@ -34,7 +33,11 @@ workflow:
 
 variables:
   RUN_TEST: ""
-  PHOENIX_PROJECT_NAME: "cca-tests"
+  # RUN_TEST_CATEGORY lets the two dispatcher jobs (test-agent / test-unit)
+  # decide which template to extend. The dashboard's _trigger_pipeline
+  # reads TestDefinition.category and sets this automatically; local
+  # `make test NAME=...` callers can omit it (default = empty = agent path).
+  RUN_TEST_CATEGORY: ""
   CCA_RUN_JUDGE: "1"
   CCA_TEST_API_KEY: "cca_k_58591dcb6e1ab9e4dee1fcc30d47f0c6552599741e0f3d55"
   # GIT_STRATEGY: clone (fresh clone per job, not shared cache) — avoids
@@ -44,7 +47,7 @@ variables:
   GIT_STRATEGY: clone
   GIT_DEPTH: "1"
 
-# ── Reusable template for all test jobs ──
+# ── Reusable template for AGENT test jobs (drive the CCA HTTP server) ──
 .test-base:
   stage: test
   image: 192.168.4.204:5000/cca-tests/test-runner:latest
@@ -53,8 +56,6 @@ variables:
   # No hard timeout — SSE idle timeout (120s) + circuit breaker are the real watchdogs
   variables:
     # Alias for legacy test code that reads CCA_URL rather than CCA_BASE_URL.
-    # Belt-and-suspenders alongside fixing each test to use the canonical
-    # CCA_BASE_URL name.
     CCA_URL: "$CCA_BASE_URL"
   artifacts:
     when: always
@@ -104,15 +105,7 @@ build-test-image:
   image: docker:latest
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
-  # Auth comes from the project's DOCKER_AUTH_CONFIG CI/CD variable
-  # (admin:Loveme-sex64 for 192.168.4.204:5000). Older versions of this
-  # job ran `docker login -u admin -p ${REGISTRY_PASS} 192.168.4.204:5000`
-  # first, but REGISTRY_PASS was never defined — so the IP collapsed
-  # into the password arg, the server defaulted to Docker Hub, and the
-  # job failed with `Error response from daemon: Get
-  # https://registry-1.docker.io/v2/: unauthorized`. The explicit
-  # login was always redundant: DOCKER_AUTH_CONFIG handles auth for
-  # both build (pulls) and push transparently. Removed.
+  # Auth comes from the project's DOCKER_AUTH_CONFIG CI/CD variable.
   script:
     - docker build -t 192.168.4.204:5000/cca-tests/test-runner:latest -f Dockerfile.test .
     - docker push 192.168.4.204:5000/cca-tests/test-runner:latest
@@ -148,9 +141,6 @@ contract-schema-drift:
     reports:
       junit: "report-*.xml"
     expire_in: 30 days
-  # Bumped from 5m → 15m alongside the unit-tests bump for the same reason
-  # (full confucius stack now loaded in test-runner). Eval-determinism /
-  # corpus-load tests do real corpus rendering which is also slower.
   timeout: 15m
 
 # Phase 3.3.5 — unit-test bucket gate. Mirrors contract-schema-drift:
@@ -173,18 +163,9 @@ unit-tests:
     reports:
       junit: "report-*.xml"
     expire_in: 30 days
-  # Bumped from 5m → 20m after the prod-deps Dockerfile change. The
-  # test-runner now imports the full confucius stack (Phoenix tracing,
-  # Django settings, langchain) so per-test startup is ~4s and the 278
-  # tests would have run ~18 min at that rate. Optimize startup separately
-  # (lazy imports / disable Phoenix in tests / reuse Django DB).
   timeout: 20m
 
-# Per-test unit + contract jobs (RUN_TEST gated). These let the CCA UI
-# dashboard's per-test Run button trigger a single test the same way it
-# does for integration tests. They share a lightweight base — unlike
-# `.test-base`, they don't depend on `health-check` because pure-Python
-# tests don't need a live CCA server.
+# ── Reusable template for unit + contract test jobs (no CCA dependency) ──
 .unit-test-base:
   stage: contract
   image: 192.168.4.204:5000/cca-tests/test-runner:latest
@@ -196,9 +177,7 @@ unit-tests:
     expire_in: 30 days
   timeout: 5m
   # Mirror `.test-base`'s JUnit upload so the dashboard sees per-run
-  # results for unit tests too. Without this, a green per-test unit
-  # pipeline leaves the dashboard row stuck at NEVER (the bucket job
-  # doesn't post per-test rows; only RUN_TEST-gated jobs do).
+  # results for unit tests too.
   after_script:
     - |
       CCA_URL="${CCA_BASE_URL:-https://192.168.4.205:8500}"
@@ -210,196 +189,6 @@ unit-tests:
           -F pipeline_id=$CI_PIPELINE_ID -F test_name=$RUN_TEST \
           -F junit=@${JUNIT_FILE} || echo "WARN: JUnit upload failed"
       fi
-
-test-context-fingerprint:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_context_fingerprint.py -v --tb=short --junitxml=report-context-fingerprint.xml
-  rules:
-    - if: '$RUN_TEST == "context-fingerprint"'
-
-test-quality-eval:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_quality_eval.py -v --tb=short --junitxml=report-quality-eval.xml
-  rules:
-    - if: '$RUN_TEST == "quality-eval"'
-
-test-agent-rubric:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_agent_rubric.py -v --tb=short --junitxml=report-agent-rubric.xml
-  rules:
-    - if: '$RUN_TEST == "agent-rubric"'
-
-test-schema-drift:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/contract/test_schema_drift.py -v --tb=short --junitxml=report-schema-drift.xml
-  rules:
-    - if: '$RUN_TEST == "schema-drift"'
-
-# Pre-existing unit tests (stream_guard suite, bash guardrails, etc.) —
-# now also reachable via the dashboard's per-test Run button.
-test-bash-guardrails:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_bash_guardrails.py -v --tb=short --junitxml=report-bash-guardrails.xml
-  rules:
-    - if: '$RUN_TEST == "bash-guardrails"'
-
-test-degeneration-policy:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_degeneration_policy.py -v --tb=short --junitxml=report-degeneration-policy.xml
-  rules:
-    - if: '$RUN_TEST == "degeneration-policy"'
-
-test-file-edit-normalization:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_file_edit_normalization.py -v --tb=short --junitxml=report-file-edit-normalization.xml
-  rules:
-    - if: '$RUN_TEST == "file-edit-normalization"'
-
-test-is-degenerate:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_is_degenerate.py -v --tb=short --junitxml=report-is-degenerate.xml
-  rules:
-    - if: '$RUN_TEST == "is-degenerate"'
-
-test-stream-guard-accumulator:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_stream_guard_accumulator.py -v --tb=short --junitxml=report-stream-guard-accumulator.xml
-  rules:
-    - if: '$RUN_TEST == "stream-guard-accumulator"'
-
-test-stream-guard-arg-parser:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_stream_guard_arg_parser.py -v --tb=short --junitxml=report-stream-guard-arg-parser.xml
-  rules:
-    - if: '$RUN_TEST == "stream-guard-arg-parser"'
-
-test-stream-guard-detectors:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_stream_guard_detectors.py -v --tb=short --junitxml=report-stream-guard-detectors.xml
-  rules:
-    - if: '$RUN_TEST == "stream-guard-detectors"'
-
-test-stream-guard-roundtrip:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_stream_guard_roundtrip.py -v --tb=short --junitxml=report-stream-guard-roundtrip.xml
-  rules:
-    - if: '$RUN_TEST == "stream-guard-roundtrip"'
-
-# Phase 3.4 — agent eval corpus validation gate
-test-corpus-load:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_corpus_load.py -v --tb=short --junitxml=report-corpus-load.xml
-  rules:
-    - if: '$RUN_TEST == "corpus-load"'
-
-# Phase 3.6 — agent eval runner (replay scoring + LIVE_SUMMARY emit)
-test-runner:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_runner.py -v --tb=short --junitxml=report-runner.xml
-  rules:
-    - if: '$RUN_TEST == "runner"'
-
-# Phase 3.7 — eval-gate threshold contract (per-bundle pass-rate floors)
-test-eval-thresholds:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/contract/test_eval_thresholds.py -v --tb=short --junitxml=report-eval-thresholds.xml
-  rules:
-    - if: '$RUN_TEST == "eval-thresholds"'
-
-# Phase 3.8 — byte-identical determinism contract for LIVE_SUMMARY
-test-eval-determinism:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/contract/test_eval_determinism.py -v --tb=short --junitxml=report-eval-determinism.xml
-  rules:
-    - if: '$RUN_TEST == "eval-determinism"'
-
-# Phase 4 — ContextBundle assembly + hashing + validation
-test-bundle:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_bundle.py -v --tb=short --junitxml=report-bundle.xml
-  rules:
-    - if: '$RUN_TEST == "bundle"'
-
-# Routes-phase decorator regexes (fastapi/flask/nestjs/spring multi-line decorators)
-test-route-detector:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_route_detector.py -v --tb=short --junitxml=report-route-detector.xml
-  rules:
-    - if: '$RUN_TEST == "route-detector"'
-
-# Phase 4 (Invariant 2) — assert no system prompt strings are hardcoded in source
-test-lifted-system-prompts:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_lifted_system_prompts.py -v --tb=short --junitxml=report-lifted-system-prompts.xml
-  rules:
-    - if: '$RUN_TEST == "lifted-system-prompts"'
-
-# Phase 4 (Invariant 9) — ConfigAuditLog bounded growth via archive command
-test-audit-log-archive:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_audit_log_archive.py -v --tb=short --junitxml=report-audit-log-archive.xml
-  rules:
-    - if: '$RUN_TEST == "audit-log-archive"'
-
-# Phase 4 (Invariant 10) — PRAGMA integrity_check fires on container boot
-test-db-integrity-boot:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_db_integrity_boot.py -v --tb=short --junitxml=report-db-integrity-boot.xml
-  rules:
-    - if: '$RUN_TEST == "db-integrity-boot"'
-
-# Code intelligence — per-call-site extraction (PowerShell/Python/Bash tree-sitter)
-test-call-site-extraction:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_call_site_extraction.py -v --tb=short --junitxml=report-call-site-extraction.xml
-  rules:
-    - if: '$RUN_TEST == "call-site-extraction"'
-
-# Code intelligence — new WRAPS / decorator-chain / find-routes tools
-test-graph-extension-new-tools:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_graph_extension_new_tools.py -v --tb=short --junitxml=report-graph-extension-new-tools.xml
-  rules:
-    - if: '$RUN_TEST == "graph-extension-new-tools"'
-
-# Code intelligence — atomic clear_file_data transaction (no partial commits on error)
-test-indexer-delete-path:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_indexer_delete_path.py -v --tb=short --junitxml=report-indexer-delete-path.xml
-  rules:
-    - if: '$RUN_TEST == "indexer-delete-path"'
-
-# Code intelligence — atomic Memgraph indexing (file-level rollback on error)
-test-memgraph-atomic-indexing:
-  extends: .unit-test-base
-  script:
-    - python3 -m pytest tests/unit/test_memgraph_atomic_indexing.py -v --tb=short --junitxml=report-memgraph-atomic-indexing.xml
-  rules:
-    - if: '$RUN_TEST == "memgraph-atomic-indexing"'
 
 # ════════════════════════════════════════════
 #  PREFLIGHT — auto-runs before every test
@@ -416,412 +205,62 @@ health-check:
     - echo "=== Phoenix ==="
     - curl -4sf --max-time 5 $PHOENIX_URL/ > /dev/null && echo "OK" || echo "WARNING - unreachable (non-fatal)"
   rules:
-    - if: $RUN_TEST    # Runs whenever RUN_TEST is set (any test trigger)
+    # Only run preflight for AGENT tests — unit/contract dispatch doesn't
+    # need CCA up. Otherwise unit-only triggers would fail at preflight.
+    - if: '$RUN_TEST != "" && $RUN_TEST != "build" && $RUN_TEST_CATEGORY != "unit" && $RUN_TEST_CATEGORY != "contract"'
   timeout: 2m
 
 # ════════════════════════════════════════════
-#  USER TESTS
+#  PER-TEST DISPATCHERS — one job replaces 57 hand-written ones
 # ════════════════════════════════════════════
+#
+# The dashboard (or `make test NAME=...`) sets RUN_TEST to the canonical
+# test name (file stem, kebab-case). RUN_TEST_CATEGORY tells the
+# dispatcher which template to use:
+#   - "unit" / "contract"  -> test-unit (no CCA dependency)
+#   - anything else        -> test-agent (full agent stack)
+#
+# The dispatcher finds the file by translating `<name>` back to
+# `test_<name with _ instead of ->.py` and globbing the right subtree.
+# Adding a new test file requires no YAML change.
 
-test-new-user-onboarding:
+test-agent:
   extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "new-user-onboarding"
   script:
-    - python -m pytest tests/user/test_new_user_onboarding.py -v --tb=short --with-judge --junitxml=report-new-user-onboarding.xml
+    - |
+      TEST_FILE=$(find tests/user tests/websearch tests/coder tests/integration tests/knowledge \
+        -name "test_${RUN_TEST//-/_}.py" -print -quit 2>/dev/null)
+      if [ -z "$TEST_FILE" ]; then
+        echo "No agent test file matches RUN_TEST=$RUN_TEST"; exit 1
+      fi
+      # Knowledge tests are factual lookup; the LLM judge adds no signal
+      # and doubles vLLM load. Skip --with-judge for that category only.
+      JUDGE_FLAG="--with-judge"
+      case "$TEST_FILE" in
+        tests/knowledge/*) JUDGE_FLAG="" ;;
+      esac
+      echo "Running $TEST_FILE  judge=${JUDGE_FLAG:-off}"
+      python -m pytest "$TEST_FILE" -v --tb=short $JUDGE_FLAG \
+        --junitxml="report-${RUN_TEST}.xml"
   environment:
-    name: test/user/new-user-onboarding
+    name: "test/${RUN_TEST}"
     deployment_tier: testing
   rules:
-    - if: '$RUN_TEST == "new-user-onboarding"'
+    - if: '$RUN_TEST != "" && $RUN_TEST != "build" && $RUN_TEST_CATEGORY != "unit" && $RUN_TEST_CATEGORY != "contract"'
 
-test-profile-crud:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "profile-crud"
+test-unit:
+  extends: .unit-test-base
   script:
-    - python -m pytest tests/user/test_profile_crud.py -v --tb=short --with-judge --junitxml=report-profile-crud.xml
-  environment:
-    name: test/user/profile-crud
-    deployment_tier: testing
+    - |
+      TEST_FILE=$(find tests/unit tests/contract -name "test_${RUN_TEST//-/_}.py" -print -quit)
+      if [ -z "$TEST_FILE" ]; then
+        echo "No unit/contract test file matches RUN_TEST=$RUN_TEST"; exit 1
+      fi
+      echo "Running $TEST_FILE"
+      python3 -m pytest "$TEST_FILE" -v --tb=short \
+        --junitxml="report-${RUN_TEST}.xml"
   rules:
-    - if: '$RUN_TEST == "profile-crud"'
-
-test-returning-user-memory:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "returning-user-memory"
-  script:
-    - python -m pytest tests/user/test_returning_user_memory.py -v --tb=short --with-judge --junitxml=report-returning-user.xml
-  environment:
-    name: test/user/returning-user-memory
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "returning-user-memory"'
-
-# ════════════════════════════════════════════
-#  WEBSEARCH TESTS
-# ════════════════════════════════════════════
-
-test-web-search-flow:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "web-search-flow"
-  script:
-    - python -m pytest tests/websearch/test_web_search_flow.py -v --tb=short --with-judge --junitxml=report-web-search.xml
-  environment:
-    name: test/websearch/web-search-flow
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "web-search-flow"'
-
-# ════════════════════════════════════════════
-#  CODER TESTS
-# ════════════════════════════════════════════
-
-test-bash-execution:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "bash-execution"
-  script:
-    - python -m pytest tests/coder/test_bash_execution.py -v --tb=short --with-judge --junitxml=report-bash-execution.xml
-  environment:
-    name: test/coder/bash-execution
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "bash-execution"'
-
-test-code-edit-flow:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "code-edit-flow"
-  script:
-    - python -m pytest tests/coder/test_code_edit_flow.py -v --tb=short --with-judge --junitxml=report-code-edit.xml
-  environment:
-    name: test/coder/code-edit-flow
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "code-edit-flow"'
-
-test-code-intelligence:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "code-intelligence"
-  script:
-    - python -m pytest tests/coder/test_code_intelligence.py -v --tb=short --with-judge --junitxml=report-code-intelligence.xml
-  environment:
-    name: test/coder/code-intelligence
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "code-intelligence"'
-
-test-code-trace:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "code-trace"
-  script:
-    - python -m pytest tests/coder/test_code_trace.py -v --tb=short --with-judge --junitxml=report-code-trace.xml
-  environment:
-    name: test/coder/code-trace
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "code-trace"'
-
-test-codebase-search:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "codebase-search"
-  script:
-    - python -m pytest tests/coder/test_codebase_search.py -v --tb=short --with-judge --junitxml=report-codebase-search.xml
-  environment:
-    name: test/coder/codebase-search
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "codebase-search"'
-
-test-document-workflow:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "document-workflow"
-  script:
-    - python -m pytest tests/coder/test_document_workflow.py -v --tb=short --with-judge --junitxml=report-document-workflow.xml
-  environment:
-    name: test/coder/document-workflow
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "document-workflow"'
-
-test-rule-lifecycle:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "rule-lifecycle"
-  script:
-    - python -m pytest tests/coder/test_rule_lifecycle.py -v --tb=short --with-judge --junitxml=report-rule-lifecycle.xml
-  environment:
-    name: test/coder/rule-lifecycle
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "rule-lifecycle"'
-
-test-workspace-indexing:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "workspace-indexing"
-  script:
-    - python -m pytest tests/coder/test_workspace_indexing.py -v --tb=short --with-judge --junitxml=report-workspace-indexing.xml
-  environment:
-    name: test/coder/workspace-indexing
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "workspace-indexing"'
-
-test-api-lookup:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "api-lookup"
-  script:
-    - python -m pytest tests/coder/test_api_lookup.py -v --tb=short --with-judge --junitxml=report-api-lookup.xml
-  environment:
-    name: test/coder/api-lookup
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "api-lookup"'
-
-# ════════════════════════════════════════════
-#  INTEGRATION TESTS
-# ════════════════════════════════════════════
-
-test-cross-session-recall:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "cross-session-recall"
-  script:
-    - python -m pytest tests/integration/test_cross_session_recall.py -v --tb=short --with-judge --junitxml=report-cross-session.xml
-  environment:
-    name: test/integration/cross-session-recall
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "cross-session-recall"'
-
-test-eva-code-trace:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "eva-code-trace"
-  script:
-    - python -m pytest tests/integration/test_eva_code_trace.py -v --tb=short --with-judge --junitxml=report-eva-trace.xml
-  environment:
-    name: test/integration/eva-code-trace
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "eva-code-trace"'
-
-test-eva-full-trace:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "eva-full-trace"
-  script:
-    - python -m pytest tests/integration/test_eva_full_trace.py -v --tb=short --with-judge --junitxml=report-eva-full-trace.xml
-  environment:
-    name: test/integration/eva-full-trace
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "eva-full-trace"'
-
-test-project-scoped-notes:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "project-scoped-notes"
-  script:
-    - python -m pytest tests/integration/test_project_scoped_notes.py -v --tb=short --with-judge --junitxml=report-project-scoped-notes.xml
-  environment:
-    name: test/integration/project-scoped-notes
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "project-scoped-notes"'
-
-test-infra-inspection-flow:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "infra-inspection-flow"
-  script:
-    - python -m pytest tests/integration/test_infra_inspection_flow.py -v --tb=short --with-judge --junitxml=report-infra-inspection-flow.xml
-  environment:
-    name: test/integration/infra-inspection-flow
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "infra-inspection-flow"'
-
-test-knowledge-pipeline:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "knowledge-pipeline"
-  script:
-    - python -m pytest tests/integration/test_knowledge_pipeline.py -v --tb=short --with-judge --junitxml=report-knowledge-pipeline.xml
-  environment:
-    name: test/integration/knowledge-pipeline
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "knowledge-pipeline"'
-
-test-gitnexus-parity:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "gitnexus-parity"
-  script:
-    - python -m pytest tests/integration/test_gitnexus_parity.py -v --tb=short --with-judge --junitxml=report-gitnexus-parity.xml
-  environment:
-    name: test/integration/gitnexus-parity
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "gitnexus-parity"'
-
-test-routing-edge-cases:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "routing-edge-cases"
-  script:
-    - python -m pytest tests/integration/test_routing_edge_cases.py -v --tb=short --with-judge --junitxml=report-routing-edge.xml
-  environment:
-    name: test/integration/routing-edge-cases
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "routing-edge-cases"'
-
-test-security-edge-cases:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "security-edge-cases"
-  script:
-    - python -m pytest tests/integration/test_security_edge_cases.py -v --tb=short --with-judge --junitxml=report-security-edge.xml
-  environment:
-    name: test/integration/security-edge-cases
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "security-edge-cases"'
-
-test-tool-isolation:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "tool-isolation"
-  script:
-    - python -m pytest tests/integration/test_tool_isolation.py -v --tb=short --with-judge --junitxml=report-tool-isolation.xml
-  environment:
-    name: test/integration/tool-isolation
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "tool-isolation"'
-
-# ── Knowledge Tests ──────────────────────────
-
-test-api-sdk-docs:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "api-sdk-docs"
-  script:
-    - python -m pytest tests/knowledge/test_api_sdk_docs.py -v --tb=short --junitxml=report-api-sdk-docs.xml
-  environment:
-    name: test/knowledge/api-sdk-docs
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "api-sdk-docs"'
-
-test-bash-docs:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "bash-docs"
-  script:
-    - python -m pytest tests/knowledge/test_bash_docs.py -v --tb=short --junitxml=report-bash-docs.xml
-  environment:
-    name: test/knowledge/bash-docs
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "bash-docs"'
-
-test-nutanix-sdk:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "nutanix-sdk"
-  script:
-    - python -m pytest tests/knowledge/test_nutanix_sdk.py -v --tb=short --junitxml=report-nutanix-sdk.xml
-  environment:
-    name: test/knowledge/nutanix-sdk
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "nutanix-sdk"'
-
-test-powershell-docs:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "powershell-docs"
-  script:
-    - python -m pytest tests/knowledge/test_powershell_docs.py -v --tb=short --junitxml=report-powershell-docs.xml
-  environment:
-    name: test/knowledge/powershell-docs
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "powershell-docs"'
-
-test-python-docs:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "python-docs"
-  script:
-    - python -m pytest tests/knowledge/test_python_docs.py -v --tb=short --junitxml=report-python-docs.xml
-  environment:
-    name: test/knowledge/python-docs
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "python-docs"'
-
-test-multi-language:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "multi-language"
-  script:
-    - python -m pytest tests/knowledge/test_multi_language.py -v --tb=short --with-judge --junitxml=report-multi-language.xml
-  environment:
-    name: test/knowledge/multi-language
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "multi-language"'
-
-# ── Additional Integration/Coder Tests ──────
-
-test-5-retrieval-modes:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "5-retrieval-modes"
-  script:
-    - python -m pytest tests/integration/test_5_retrieval_modes.py -v --tb=short --with-judge --junitxml=report-5-retrieval-modes.xml
-  environment:
-    name: test/integration/5-retrieval-modes
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "5-retrieval-modes"'
-
-test-negative-cases:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "negative-cases"
-  script:
-    - python -m pytest tests/integration/test_negative_cases.py -v --tb=short --with-judge --junitxml=report-negative-cases.xml
-  environment:
-    name: test/integration/negative-cases
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "negative-cases"'
-
-test-browse-project:
-  extends: .test-base
-  variables:
-    PHOENIX_PROJECT_NAME: "browse-project"
-  script:
-    - python -m pytest tests/coder/test_browse_project.py -v --tb=short --with-judge --junitxml=report-browse-project.xml
-  environment:
-    name: test/coder/browse-project
-    deployment_tier: testing
-  rules:
-    - if: '$RUN_TEST == "browse-project"'
+    - if: '$RUN_TEST != "" && ($RUN_TEST_CATEGORY == "unit" || $RUN_TEST_CATEGORY == "contract")'
 
 # ════════════════════════════════════════════
 #  PAGES — deploy CCA test dashboard

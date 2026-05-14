@@ -1044,9 +1044,14 @@ class TestRunContext:
             # On completion: fixture calls finalize() automatically
     """
 
-    def __init__(self, client: CCAClient, test_node_name: str) -> None:
+    def __init__(self, client: CCAClient, test_node) -> None:
+        """test_node: pytest node object (preferred) or bare string.
+
+        Either way, _normalize_name reduces it to the canonical file-stem
+        name per the doc standard (tests/_naming.py).
+        """
         self.client = client  # Direct access for tests that need it
-        self._test_name = self._normalize_name(test_node_name)
+        self._test_name = self._normalize_name(test_node)
         self._pipeline_id = os.environ.get("CI_PIPELINE_ID", "local")
         self._user_ids: List[str] = []
         self._user_names: List[str] = []
@@ -1199,17 +1204,14 @@ class TestRunContext:
             )
 
     @staticmethod
-    def _normalize_name(node_name: str) -> str:
-        """Convert pytest node name to CI test-name format.
+    def _normalize_name(node_or_name) -> str:
+        """Return the canonical test name (file stem). Thin wrapper around
+        tests/_naming.py:canonical_name (the doc-level standard).
 
-        Examples:
-            "TestNewUserOnboarding::test_new_user_onboarding"
-            → "new-user-onboarding"
+        Accepts a pytest node (preferred — exposes the file path) or a
+        bare string. If you pass a bare function-name string, it's used
+        as-is for the stem-fallback; multi-function/descriptive cases
+        require the pytest node to resolve correctly.
         """
-        # Take the method name part (after ::)
-        name = node_name.split("::")[-1] if "::" in node_name else node_name
-        # Strip test_ prefix
-        if name.startswith("test_"):
-            name = name[5:]
-        # Underscores to hyphens
-        return name.replace("_", "-")
+        from ._naming import canonical_name
+        return canonical_name(node_or_name)

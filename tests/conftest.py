@@ -45,10 +45,11 @@ PHOENIX_ENDPOINT = os.getenv("PHOENIX_COLLECTOR_ENDPOINT", "http://192.168.4.204
 CCA_BASE_URL = os.getenv("CCA_BASE_URL", "https://192.168.4.205:8500")
 
 # Per-test Phoenix projects. Each test gets its own project named
-# "test/{normalized_test_name}" so the /tests dashboard can deep-link
-# each test row to its own Phoenix project, and retries pile up as
-# separate traces inside the same project (one page per test, run
-# history visible by scrolling).
+# "test/{canonical_name}" where canonical_name is the file stem per
+# the doc standard (see tests/_naming.py). One Phoenix project per
+# test file. Functions inside the file are sub-checks; their traces
+# all go to the same project. Parametrized variants land there too.
+# Retries pile up — the project page IS the test's run history.
 #
 # The trace_test fixture below sets this per-test via using_project()
 # and tells the CCAClient to send "X-Phoenix-Project: <test_project>"
@@ -58,11 +59,9 @@ CCA_BASE_URL = os.getenv("CCA_BASE_URL", "https://192.168.4.205:8500")
 # PHOENIX_PROJECT_NAME env var is honored only as the fallback project
 # for the shared TracerProvider Resource — used by spans that aren't
 # wrapped in using_project() (session-level setup spans, if any).
-# The .gitlab-ci.yml's per-job PHOENIX_PROJECT_NAME override is ignored
-# for per-test routing; we always derive "test/<bare-name>" from the
-# pytest node so the routing is consistent regardless of CI config.
-PHOENIX_PROJECT_PREFIX = "test"
 PROJECT_NAME = os.getenv("PHOENIX_PROJECT_NAME", "cca-http")
+
+from ._naming import canonical_name
 
 # Phoenix per-scope project override (uses contextvars; propagates
 # through async). Falls back to a no-op if the dependency is missing.
@@ -72,19 +71,6 @@ except ImportError:
     from contextlib import nullcontext as _nullctx
     def _using_project(_name):  # type: ignore[misc]
         return _nullctx()
-
-
-def _normalize_test_name(node_name: str) -> str:
-    """test_new_user_onboarding -> new-user-onboarding
-
-    Mirrors TestRunContext._normalize_name so Phoenix project names,
-    GitLab RUN_TEST values, TestDefinition.test_name rows, and report
-    folder names all stay in lockstep.
-    """
-    name = node_name.split("::")[-1] if "::" in node_name else node_name
-    if name.startswith("test_"):
-        name = name[5:]
-    return name.replace("_", "-")
 
 # Inter-test cooldown (seconds) to prevent server overload.
 # Each test triggers LLM inference on vLLM — without cooldown,
@@ -223,11 +209,13 @@ def trace_test(request, phoenix_tracer, cca):
     test_name = request.node.name
     span_name = f"{category}::{test_name}"
 
-    # Per-test Phoenix project: "test/new-user-onboarding" etc.
-    # This becomes the project for BOTH the local test root span (via
-    # using_project below) AND the server-side spans (via the
-    # X-Phoenix-Project header set on the CCAClient).
-    test_project = f"{PHOENIX_PROJECT_PREFIX}/{_normalize_test_name(test_name)}"
+    # Per-test Phoenix project derived from the FILE per the doc standard
+    # (tests/_naming.py). "test/new-user-onboarding" for any function in
+    # test_new_user_onboarding.py — file == test, function names are
+    # sub-checks within that one test. This becomes the project for
+    # BOTH the local test root span (via using_project below) AND the
+    # server-side spans (via the X-Phoenix-Project header on CCAClient).
+    test_project = f"test/{canonical_name(request.node)}"
     _prev_project = cca.project_name
     cca.project_name = test_project
     # Restore even if anything below raises (covers errors during span
@@ -387,17 +375,17 @@ def trace_test(request, phoenix_tracer, cca):
     # Generate .md test report for Claude Code review (agent tests only —
     # non-agent tests have no transcript/turns/iterations to render).
     #
-    # IMPORTANT: pass the dash-form short name (RUN_TEST / ci_job) when in
-    # CI so the folder name matches what TestRunContext writes manifest.json
-    # to, and what the dashboard reads (P{pipeline_id}_{ci_job}). Previously
-    # this used span_name.replace("::","-") producing the long form
-    # "user-test_new_user_onboarding" — that created a second parallel
-    # folder the dashboard never looked at.
+    # Report folder name = canonical name (file stem) per the standard.
+    # CI sets _ci_job = RUN_TEST = canonical name, so use that when
+    # available; for local runs fall back to deriving from the pytest
+    # node via the shared helper. Either way the folder is
+    # P{pipeline_id}_{canonical-name} and matches the dashboard's
+    # expectation.
     if metrics:
         try:
             from tests.report_generator import generate_test_report
 
-            _report_name = _ci_job if _ci_job else span_name.replace("::", "-")
+            _report_name = _ci_job if _ci_job else canonical_name(request.node)
 
             test_dir = generate_test_report(
                 test_name=_report_name,
@@ -557,7 +545,11 @@ def test_run(cca, request):
             assert r.content
     """
     from .cca_client import TestRunContext
-    ctx = TestRunContext(cca, request.node.name)
+    # Pass the pytest node so TestRunContext can derive the canonical
+    # file-stem name (per tests/_naming.py). Passing request.node.name
+    # alone would give us the function name, which violates the standard
+    # for multi-function or descriptively-named tests.
+    ctx = TestRunContext(cca, request.node)
     yield ctx
     # Determine if the test failed
     failed = hasattr(request.node, "rep_call") and request.node.rep_call.failed

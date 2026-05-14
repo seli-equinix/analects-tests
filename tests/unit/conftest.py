@@ -50,10 +50,11 @@ def trace_test(request):
     cca_url = os.environ.get("CCA_BASE_URL", "https://192.168.4.205:8500")
     api_key = os.environ.get("CCA_TEST_API_KEY", "")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    # Node ID format mirrors the parent: span_name was f"{category}::{name}"
-    # — unit tests fall into the "other" category there. Match that so
-    # dashboard's existing test_definition rows correlate.
-    node_id = f"other::{request.node.name}".replace("::", "-")
+    # node_id = canonical file-stem name (per tests/_naming.py + the doc).
+    # Pre-fix: this used f"other::{request.node.name}" which made unit-test
+    # TestResult rows un-joinable to TestDefinition (which keys by file-stem).
+    from tests._naming import canonical_name
+    node_id = canonical_name(request.node)
     try:
         httpx.post(
             f"{cca_url}/admin/test-result",
