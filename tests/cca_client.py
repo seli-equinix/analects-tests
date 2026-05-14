@@ -157,6 +157,20 @@ class CCAClient:
         # IP-address-mismatch errors. Setting CCA_VERIFY_SSL=0 disables
         # verification — only safe on the local LAN.
         verify_ssl = os.getenv("CCA_VERIFY_SSL", "1") not in ("0", "false", "no")
+
+        def _inject_project_header(request):
+            """Send X-Phoenix-Project on EVERY request — diagnostic
+            calls (health, list_users, find_user_by_name, etc.) and
+            the streaming chat alike. Without this hook, diagnostic
+            calls bypass per-test project routing and leak traces to
+            the global cca-http project (~64 traces per Run All cycle
+            from the require_cca_healthy fixture alone). Routing
+            happens in the server's chat_completions handler and
+            applies to whatever endpoint runs.
+            """
+            if self.project_name:
+                request.headers["X-Phoenix-Project"] = self.project_name
+
         self._client = httpx.Client(
             headers=default_headers,
             verify=verify_ssl,
@@ -166,6 +180,7 @@ class CCAClient:
                 write=30.0,
                 pool=30.0,
             ),
+            event_hooks={"request": [_inject_project_header]},
         )
 
     def close(self) -> None:
@@ -470,34 +485,22 @@ class CCAClient:
             pool=30.0,
         )
 
-        # Build headers with W3C trace context + per-test Phoenix routing.
+        # X-Phoenix-Project is injected globally by the httpx event hook
+        # on self._client (see __init__) — every request to the CCA server
+        # carries it when self.project_name is set, so diagnostic calls
+        # (health, list_users, etc.) route to the per-test project too.
         #
-        # Two orthogonal pieces of routing metadata, both required:
+        # Here we add W3C traceparent via inject(headers): tells the
+        # server's OTel SDK to parent its spans under the test root
+        # span, so test -> cca.request -> cca.agent -> cca.llm.invoke
+        # -> vLLM is ONE connected trace.
         #
-        # 1. X-Phoenix-Project: tells the server which Phoenix project to
-        #    write spans into for this request. Without it every span
-        #    lands in the global production project (e.g. "cca-http"),
-        #    which makes per-test history (and the /tests Trace button)
-        #    impossible to surface.
-        #
-        # 2. W3C traceparent (via inject(headers)): tells the server's
-        #    OTel SDK to parent its spans under the test root span, so
-        #    test -> cca.request -> cca.agent -> cca.llm.invoke -> vLLM
-        #    is ONE connected trace.
-        #
-        # These compose. using_project() on the server is a per-scope
-        # project override that does NOT break parent-child links — Phoenix
-        # stores spans of one trace together regardless of project. With
-        # both present, every span of one test run lands in test/{name}
-        # AND the full hierarchy is visible in that single project.
-        #
-        # Do not remove either without understanding the other.
-        # Authorization header is set as default on self._client — no per-call addition needed
+        # X-Phoenix-Project routes the project, traceparent links the
+        # parent-child relationship — both compose, Phoenix preserves
+        # parent links regardless of project boundaries.
         headers: Dict[str, str] = {"X-Session-Id": session_id}
         if user_id:
             headers["X-User-Id"] = user_id
-        if self.project_name:
-            headers["X-Phoenix-Project"] = self.project_name
         inject(headers)  # adds traceparent header
 
         try:

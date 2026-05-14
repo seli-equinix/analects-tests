@@ -175,19 +175,48 @@ def _post_test_result(cca_url: str, headers: dict, ci_job: str,
         log.warning("Failed to post test result: %s", e)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def trace_file(request, phoenix_tracer, cca):
+    """One root span per test FILE. All functions in the file (and all
+    parametrize cases of each) become child spans under this root —
+    Phoenix collapses them into ONE trace per file run, regardless of
+    how many pytest invocations the file contains.
+
+    The doc standard (docs/testing/writing-tests.md) says the FILE is
+    the test. Functions inside are sub-checks; parametrize cases are
+    different invocations of the same sub-check. They all belong to
+    one trace per file run. Retries (next pipeline run) produce a new
+    trace inside the same Phoenix project.
+
+    Also pins CCAClient.project_name for the whole file so any
+    session-scoped diagnostic call (health check, cleanup) routes to
+    the right per-file project instead of the global cca-http.
+    """
+    _provider, tracer = phoenix_tracer
+    file_label = canonical_name(request.module.__file__)
+    file_project = f"test/{file_label}"
+
+    _prev_project = cca.project_name
+    cca.project_name = file_project
+    request.addfinalizer(lambda: setattr(cca, "project_name", _prev_project))
+
+    # The `with` block stays open for the whole module's run because
+    # pytest holds this generator paused at `yield`. OTel context
+    # propagation keeps this span "current" so each per-function
+    # `trace_test` span auto-parents under it — one trace, many spans.
+    with _using_project(file_project), \
+            tracer.start_as_current_span(f"file::{file_label}") as root:
+        root.set_attribute("openinference.span.kind", "CHAIN")
+        root.set_attribute("cca.test.file", file_label)
+        root.set_attribute("cca.test.module", request.module.__name__)
+        yield root
+
+
 @pytest.fixture(autouse=True)
-def trace_test(request, phoenix_tracer, cca):
-    """Wrap every test in a Phoenix span with test metadata.
-
-    Creates a root span like 'websearch::test_basic_search' so tests
-    are easy to find and filter in the Phoenix UI.
-
-    Also pins this test's Phoenix project to "test/{normalized_name}" for
-    the duration of the test (both the test-process spans via
-    using_project() and the server-process spans via the
-    X-Phoenix-Project header on the CCAClient). Each test ends up in
-    its own Phoenix project; retries pile up as separate traces inside
-    that project.
+def trace_test(request, phoenix_tracer, cca, trace_file):
+    """Wrap every test function in a child span under `trace_file`'s
+    root. Each parametrize case becomes a child too — they all share
+    the file's trace_id, so Phoenix shows them as one trace.
 
     Annotations are collected during the test via span._pending_annotations
     and posted AFTER the span closes + flushes — fixing the 404 race.
@@ -209,18 +238,9 @@ def trace_test(request, phoenix_tracer, cca):
     test_name = request.node.name
     span_name = f"{category}::{test_name}"
 
-    # Per-test Phoenix project derived from the FILE per the doc standard
-    # (tests/_naming.py). "test/new-user-onboarding" for any function in
-    # test_new_user_onboarding.py — file == test, function names are
-    # sub-checks within that one test. This becomes the project for
-    # BOTH the local test root span (via using_project below) AND the
-    # server-side spans (via the X-Phoenix-Project header on CCAClient).
+    # File-stem project (set once by trace_file; re-asserted here for
+    # the function-level span's own using_project tag — same value).
     test_project = f"test/{canonical_name(request.node)}"
-    _prev_project = cca.project_name
-    cca.project_name = test_project
-    # Restore even if anything below raises (covers errors during span
-    # setup, teardown, or post-test reporting).
-    request.addfinalizer(lambda: setattr(cca, "project_name", _prev_project))
 
     with _using_project(test_project), tracer.start_as_current_span(span_name) as span:
         span.set_attribute("openinference.span.kind", "CHAIN")
@@ -579,9 +599,16 @@ def warn_missing_api_key():
         )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def require_cca_healthy(cca):
-    """Skip all tests if CCA AAAM server is unreachable."""
+    """Skip all tests if CCA AAAM server is unreachable.
+
+    Session-scoped: one health check per pytest session, not per
+    function. Under the GitLab dispatcher, each pipeline runs one
+    file's pytest invocation, so session ≈ file. The dispatcher's
+    `health-check` job already gates pipeline-level health; this
+    fixture covers local `make test NAME=...` runs that skip CI.
+    """
     health = cca.health()
     if health.get("status") != "healthy":
         pytest.skip(
