@@ -204,11 +204,32 @@ health-check:
     - curl -4sf --max-time 10 ${VLLM_BASE_URL%/v1}/health && echo "OK"
     - echo "=== Phoenix ==="
     - curl -4sf --max-time 5 $PHOENIX_URL/ > /dev/null && echo "OK" || echo "WARNING - unreachable (non-fatal)"
+    # Wait for the workspace indexer's first cycle to complete before
+    # letting any agent test run. Tests that hit the call graph (e.g.
+    # test_code_intelligence's Connect-SessionVC assertion) used to race
+    # this — they'd run while Phase 2 was still resolving and see an
+    # empty graph. /health.workspace_indexing_ready flips True after
+    # the first monitor cycle finishes; poll until then.
+    - |
+      echo "=== Workspace Indexing ==="
+      for i in $(seq 1 60); do
+        READY=$(curl -4sf --max-time 5 $CCA_BASE_URL/health 2>/dev/null \
+          | python3 -c "import sys,json; print(json.load(sys.stdin).get('workspace_indexing_ready', False))" 2>/dev/null)
+        if [ "$READY" = "True" ]; then
+          echo "workspace_indexing_ready=True after ${i}x5s polls"
+          break
+        fi
+        if [ "$i" = "60" ]; then
+          echo "WARNING - workspace_indexing_ready never flipped after 5min — proceeding anyway"
+          break
+        fi
+        sleep 5
+      done
   rules:
     # Only run preflight for AGENT tests — unit/contract dispatch doesn't
     # need CCA up. Otherwise unit-only triggers would fail at preflight.
     - if: '$RUN_TEST != "" && $RUN_TEST != "build" && $RUN_TEST_CATEGORY != "unit" && $RUN_TEST_CATEGORY != "contract"'
-  timeout: 2m
+  timeout: 6m
 
 # ════════════════════════════════════════════
 #  PER-TEST DISPATCHERS — one job replaces 57 hand-written ones
