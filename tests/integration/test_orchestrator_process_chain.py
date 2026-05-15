@@ -32,15 +32,13 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-import time
 import uuid
 from typing import Iterator
 
 import pytest
 
 from tests.integration._admin import (
-    admin_get, admin_post, cypher, cypher_rows, delete_project,
-    trigger_reindex, wait_for_reindex,
+    cypher, cypher_rows, trigger_reindex, wait_for_reindex,
 )
 
 
@@ -103,16 +101,24 @@ def orchestrator_project() -> Iterator[dict]:
     host_dir = f"{HOST_WORKSPACE}/{proj_name}"
     container_dir = f"/workspace/{proj_name}"
 
+    # Chained orchestration: orchestrator → step_a → step_b. A 3-step
+    # path through module entries, which clears PROCESS phase's
+    # default min_steps=3 threshold (see
+    # confucius/server/code_intelligence/pipeline/phases/processes.py:44).
+    # A flat orchestrator-runs-both pattern would produce two 2-step
+    # traces, each filtered out by min_steps and never producing a
+    # Process node.
     orchestrator_py = (
         "import subprocess\n"
         "subprocess.run(['python', 'step_a.py'])\n"
-        "subprocess.run(['python', 'step_b.py'])\n"
     )
     step_a_py = (
+        "import subprocess\n"
         "def process_a():\n"
         "    return 1\n"
         "\n"
         "process_a()\n"
+        "subprocess.run(['python', 'step_b.py'])\n"
     )
     step_b_py = (
         "def process_b():\n"
