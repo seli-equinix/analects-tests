@@ -208,48 +208,71 @@ class TestModuleEntriesCreated:
 
 
 class TestCrossFileCallsEdges:
-    def test_orchestrator_has_two_subprocess_calls(
+    def test_orchestrator_calls_step_a(
         self, orchestrator_project: dict,
     ) -> None:
+        """orchestrator.py subprocess-runs step_a.py. CALLS edge must exist
+        from orchestrator's __module__ → step_a's __module__ with
+        method='subprocess'.
+        """
         rows = cypher_rows(
             """
             MATCH (a:Function {qualified_name: $orch})-[r:CALLS]->(b:Function)
             WHERE r.method = 'subprocess'
             RETURN b.qualified_name AS target, r.method AS method, r.line AS line
-            ORDER BY r.line
             """,
             orch=orchestrator_project["orchestrator_qname"],
         )
         targets = {r["target"] for r in rows}
-        expected = {
-            orchestrator_project["step_a_qname"],
-            orchestrator_project["step_b_qname"],
-        }
-        assert expected.issubset(targets), (
-            f"orchestrator.py is missing subprocess CALLS edges. "
-            f"Expected {expected}, got {targets}. "
+        assert orchestrator_project["step_a_qname"] in targets, (
+            f"orchestrator.py is missing its subprocess CALLS edge to step_a. "
+            f"Got: {targets}. "
             f"Stage 2 (invoke_detector → resolve_cross_file_invocations) broken?"
+        )
+
+    def test_step_a_calls_step_b(
+        self, orchestrator_project: dict,
+    ) -> None:
+        """step_a.py subprocess-runs step_b.py — the second hop of the chain.
+        Without this edge, the 3-step Process chain wouldn't form.
+        """
+        rows = cypher_rows(
+            """
+            MATCH (a:Function {qualified_name: $step_a})-[r:CALLS]->(b:Function)
+            WHERE r.method = 'subprocess'
+            RETURN b.qualified_name AS target, r.method AS method
+            """,
+            step_a=orchestrator_project["step_a_qname"],
+        )
+        targets = {r["target"] for r in rows}
+        assert orchestrator_project["step_b_qname"] in targets, (
+            f"step_a.py is missing its subprocess CALLS edge to step_b. "
+            f"Got: {targets}"
         )
 
     def test_method_property_is_subprocess(
         self, orchestrator_project: dict,
     ) -> None:
+        """Both cross-file edges in the chain must carry method='subprocess',
+        not 'direct' — confirming Stage 2c's property write went through."""
         rows = cypher_rows(
             """
-            MATCH (a:Function {qualified_name: $orch})-[r:CALLS]->(b)
-            WHERE b.qualified_name IN [$a, $b]
+            MATCH (a:Function)-[r:CALLS]->(b:Function)
+            WHERE a.qualified_name IN [$orch, $step_a]
+              AND b.qualified_name IN [$step_a, $step_b]
+              AND a.qualified_name <> b.qualified_name
             RETURN r.method AS method
             """,
             orch=orchestrator_project["orchestrator_qname"],
-            a=orchestrator_project["step_a_qname"],
-            b=orchestrator_project["step_b_qname"],
+            step_a=orchestrator_project["step_a_qname"],
+            step_b=orchestrator_project["step_b_qname"],
         )
-        assert rows, "no CALLS edges between orchestrator and steps"
+        assert rows, "no CALLS edges between orchestrator/step_a/step_b"
         methods = {r["method"] for r in rows}
         # Both edges should carry the 'subprocess' method label, not
         # 'direct' (which would mean the cross-file resolver didn't fire).
         assert methods == {"subprocess"}, (
-            f"expected method='subprocess' on both edges, got {methods}"
+            f"expected method='subprocess' on the chain edges, got {methods}"
         )
 
 
