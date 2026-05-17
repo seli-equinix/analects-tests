@@ -28,7 +28,15 @@ def knowledge_client():
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    client = httpx.Client(base_url=CCA_URL, timeout=30, headers=headers)
+    # Mirror CCAClient: honor CCA_VERIFY_SSL=0 for IP-based test hosts
+    # whose self-signed cert SAN doesn't cover the IP. Without this,
+    # parametrized tests fail on SSLCertVerificationError before
+    # reaching their assertions, masking the real test outcome.
+    verify_env = os.environ.get("CCA_VERIFY_SSL", "1").lower()
+    verify_ssl = verify_env not in ("0", "false", "no", "off", "")
+    client = httpx.Client(
+        base_url=CCA_URL, timeout=30, headers=headers, verify=verify_ssl,
+    )
     yield client
     client.close()
 
