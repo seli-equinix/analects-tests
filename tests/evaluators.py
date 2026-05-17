@@ -310,6 +310,29 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
                 if "command" not in err.lower()
             ]
 
+    # Path-probing recovery: when the agent doesn't know exactly where
+    # a file lives, it tries several plausible paths via
+    # `str_replace_editor view` until one works. A view failure on a
+    # guessed path that's followed by a successful view is normal
+    # self-correction — not a delivery failure. We treat such cases as
+    # recovered IF there's at least one `str_replace_editor` success in
+    # the same session AND the response is substantive (the agent did
+    # produce an answer). Without this carve-out, every test that asks
+    # the agent to find a file by name (not full path) ends up failing
+    # on the first wrong guess.
+    if unrecovered:
+        had_editor_success = any(
+            tc.get("name") == "str_replace_editor" and tc.get("success")
+            for tc in tool_calls
+        )
+        has_substantive_response = len(getattr(result, "content", "")) > 200
+        if had_editor_success and has_substantive_response:
+            unrecovered = [
+                err for err in unrecovered
+                if "str_replace_editor" not in err.lower()
+                and "view" not in err.lower()
+            ]
+
     # Inline-response recovery: agent may return code inline (in markdown)
     # rather than writing to a file. If the response has substantive
     # content (>200 chars), bash command failures are likely verification
