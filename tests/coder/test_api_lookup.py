@@ -108,6 +108,31 @@ class TestAPILookup:
             f"Response: {r2.content[:200]}"
         )
 
+        # Loud-failure guard: a real Phoenix trace showed Turn 2 burning all
+        # 15 iterations and returning a message saying "the file got mangled,
+        # let me try again..." while pytest's "has_code" check below still
+        # passed (because the word "function" appeared somewhere in the
+        # commentary). The judge correctly flagged response_quality=0.00.
+        # This explicit reject-list converts the silent-pass into a loud
+        # fail when the agent's response is dominated by failure markers
+        # — same signal the judge gave us, but at pytest level so the
+        # dashboard turns red.
+        content2_lower = r2.content.lower()
+        failure_markers = [
+            "maximum number of iterations",
+            "max iterations reached",
+            "got mangled",
+            "let me try again",
+            "i'll retry",
+            "the file appears to be corrupted",
+        ]
+        hit_markers = [m for m in failure_markers if m in content2_lower]
+        assert not hit_markers, (
+            f"Turn 2 hit failure markers {hit_markers} — agent burned its "
+            f"iteration budget without producing a substantive answer. "
+            f"Response head: {r2.content[:300]}"
+        )
+
         # Track tools used (for Phoenix debugging)
         # get_api_docs is optional in Turn 2 — agent may reuse docs from Turn 1
         tool_names_2 = r2.tool_names

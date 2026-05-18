@@ -601,19 +601,46 @@ def warn_missing_api_key():
 
 @pytest.fixture(scope="session", autouse=True)
 def require_cca_healthy(cca):
-    """Skip all tests if CCA AAAM server is unreachable.
+    """Skip all tests if CCA AAAM server is unreachable OR if workspace
+    indexing hasn't finished its first cycle yet.
 
     Session-scoped: one health check per pytest session, not per
     function. Under the GitLab dispatcher, each pipeline runs one
     file's pytest invocation, so session ≈ file. The dispatcher's
     `health-check` job already gates pipeline-level health; this
     fixture covers local `make test NAME=...` runs that skip CI.
+
+    The workspace_indexing_ready gate prevents `test_code_intelligence`
+    (and any other graph-dependent suite) from racing the indexer: a
+    cold cca container parses files in Phase 1 but doesn't populate
+    CALLS edges until Phase 2 (resolve_project_calls) finishes the
+    project-scoped second pass. Tests that ran in the gap saw empty
+    callers, e.g. "Connect-SessionVC has 0 callers" when the graph
+    actually has 89. Poll 5s × 60 = 5 min ceiling; if still not ready,
+    skip rather than fail (so a slow indexer doesn't masquerade as a
+    product regression).
     """
     health = cca.health()
     if health.get("status") != "healthy":
         pytest.skip(
             f"CCA AAAM server not healthy: {health.get('error', 'unknown')}"
         )
+
+    if health.get("workspace_indexing_ready"):
+        return
+
+    log.info("Workspace indexing not ready yet — polling /health (5s × 60 max)")
+    for _ in range(60):
+        time.sleep(5)
+        health = cca.health()
+        if health.get("workspace_indexing_ready"):
+            log.info("Workspace indexing ready — proceeding")
+            return
+
+    pytest.skip(
+        "CCA workspace indexing not ready after 5 min — slow indexer, "
+        "not a product regression"
+    )
 
 
 # ==================== Test Helpers ====================
