@@ -145,7 +145,8 @@ class CCAClient:
         self.idle_timeout = idle_timeout
         self.project_name = project_name
         self.api_key = os.getenv("CCA_TEST_API_KEY", "")
-        self._session_turns: dict[str, int] = {}  # session_id → turn count
+        self._session_turns: dict[str, int] = {}  # session_id → turn count (per-session, diagnostic)
+        self._global_turns: int = 0  # monotonic across ALL sessions in a test — feeds cca.chat [Turn N] label
         # Centralized auth: Bearer token applied to ALL requests (chat + diagnostics)
         default_headers: dict[str, str] = {}
         if self.api_key:
@@ -310,18 +311,41 @@ class CCAClient:
         except Exception:
             pass  # test_span may be a NoOp span if pytest fixture is absent
 
-        # Track turn number per session for Phoenix labeling
-        turn = self._session_turns.get(session_id, 0) + 1
-        self._session_turns[session_id] = turn
-        span_name = f"cca.chat [Turn {turn}]"
+        # Turn label is MONOTONIC across the entire test — so a 4-call test
+        # with two sessions shows Turn 1/2/3/4 instead of Turn 1/2/3/1
+        # (the per-session reset confused trace readers). Keep the per-
+        # session counter as a span attribute for session-cycle slicing.
+        self._global_turns += 1
+        global_turn = self._global_turns
+        session_turn = self._session_turns.get(session_id, 0) + 1
+        self._session_turns[session_id] = session_turn
+        span_name = f"cca.chat [Turn {global_turn}]"
 
         with self.tracer.start_as_current_span(span_name) as span:
-            span.set_attribute("openinference.span.kind", "CHAIN")
+            # LLM kind on cca.chat so the per-turn conversation panel
+            # renders directly on this span — and so the LLM call isn't
+            # buried under a CHAIN in Phoenix's tree view. The parent
+            # test span keeps its LLM-kind multi-turn pack for the
+            # consolidated view; per-turn panels add UNDER it.
+            span.set_attribute("openinference.span.kind", "LLM")
             span.set_attribute("input.value", message)
             span.set_attribute("cca.session_id", session_id)
-            span.set_attribute("cca.turn", turn)
+            span.set_attribute("cca.turn", global_turn)             # test-level monotonic
+            span.set_attribute("cca.session_turn", session_turn)    # within-session counter
             span.set_attribute("cca.message", message[:200])
             span.set_attribute("cca.idle_timeout", read_timeout)
+
+            # Per-turn conversation panel attrs. Phoenix renders these
+            # as the user/assistant pair for THIS turn; the test span's
+            # multi-turn pack remains the consolidated view.
+            if system:
+                span.set_attribute("llm.input_messages.0.message.role", "system")
+                span.set_attribute("llm.input_messages.0.message.content", system)
+                span.set_attribute("llm.input_messages.1.message.role", "user")
+                span.set_attribute("llm.input_messages.1.message.content", message)
+            else:
+                span.set_attribute("llm.input_messages.0.message.role", "user")
+                span.set_attribute("llm.input_messages.0.message.content", message)
 
             messages: List[Dict[str, str]] = []
             if system:
@@ -365,6 +389,11 @@ class CCAClient:
                     span.set_attribute("cca.response_preview", result.content[:500])
                     span.set_attribute("output.value", result.content)
                     span.set_attribute("cca.finish_reason", result.finish_reason)
+                    # Per-turn output message — completes the conversation
+                    # pair on THIS cca.chat span (input msg(s) were set
+                    # before _stream_chat; the assistant reply lands here).
+                    span.set_attribute("llm.output_messages.0.message.role", "assistant")
+                    span.set_attribute("llm.output_messages.0.message.content", result.content)
                     if result.metadata:
                         span.set_attribute(
                             "cca.tool_iterations",
