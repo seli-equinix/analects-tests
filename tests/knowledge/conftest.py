@@ -57,15 +57,23 @@ def search_docs(client: httpx.Client, query: str) -> dict:
     # Normalize exact-match format to results array format
     if "results" not in data and "source" in data:
         source = data.get("source", "")
-        lang = ""
-        if "/pwsh-" in source:
-            lang = "powershell"
-        elif source.startswith("vmware/"):
-            lang = "powershell"
+        # Prefer the server-provided language (added 2026-05-19 for T-7).
+        # Fall back to source-path heuristic so older cca builds still work.
+        lang = data.get("language") or ""
+        if not lang:
+            if "/pwsh-" in source:
+                lang = "powershell"
+            elif source.startswith("vmware/"):
+                lang = "powershell"
+            elif source.startswith(("python/", "openai/", "google/", "sqlalchemy/", "redis/", "jira/", "celery/", "azure/", "aws/", "cohere/", "clickhouse-connect/")) or "/python/" in source:
+                lang = "python"
+            else:
+                lang = "unknown"
         data["results"] = [{
             "id": source,
             "snippet": data.get("documentation", ""),
             "language": lang,
+            "languages": data.get("languages", [lang] if lang else []),
         }]
 
     return data
