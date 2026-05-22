@@ -346,6 +346,34 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
                 if "command" not in err.lower()
             ]
 
+    # Memory-family tool-switching recovery: edit_memory failures are
+    # commonly self-corrected by switching to write_memory or
+    # delete_memory + write_memory at a later iteration (the agent
+    # recognises the anchor doesn't match and rewrites the whole node
+    # instead). The original "same-tool succeeded later" check at the top
+    # misses this pattern. Treat edit_memory failures as recovered when a
+    # write_memory or delete_memory succeeds AFTER the last edit_memory
+    # failure in the same session.
+    if unrecovered:
+        edit_memory_fail_iters = [
+            tc.get("iteration", 0) for tc in tool_calls
+            if not tc.get("success", True) and tc.get("name") == "edit_memory"
+        ]
+        if edit_memory_fail_iters:
+            last_edit_fail = max(edit_memory_fail_iters)
+            recovery_family = {"write_memory", "delete_memory", "import_memory"}
+            recovered_via_family = any(
+                tc.get("success", False)
+                and tc.get("name") in recovery_family
+                and tc.get("iteration", 0) > last_edit_fail
+                for tc in tool_calls
+            )
+            if recovered_via_family:
+                unrecovered = [
+                    err for err in unrecovered
+                    if "edit memory" not in err.lower()
+                ]
+
     if not unrecovered:
         return {
             "name": "tool_errors",
