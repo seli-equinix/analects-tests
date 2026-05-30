@@ -20,6 +20,7 @@ orchestrator runtime / bs4); runs in the cca-tests CI image.
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -134,8 +135,11 @@ def _ext() -> FileEditExtension:
 
 
 class TestInsertMissingFileRedirectsToCreate:
-    @pytest.mark.asyncio
-    async def test_insert_missing_file_with_content_creates(self, tmp_path):
+    # These call the async handler via asyncio.run() rather than
+    # @pytest.mark.asyncio so they're invocation-independent (pytest-asyncio
+    # auto-mode only engages under a whole-dir run, not a single-file one).
+
+    def test_insert_missing_file_with_content_creates(self, tmp_path):
         ext = _ext()
         missing = tmp_path / "does_not_exist.py"
         edit_input = ant.TextEditorInput(
@@ -145,7 +149,9 @@ class TestInsertMissingFileRedirectsToCreate:
         with patch.object(
             ext, "_on_create_command", new=AsyncMock(return_value="created"),
         ) as mock_create:
-            result = await ext._on_insert_command(missing, edit_input, MagicMock())
+            result = asyncio.run(
+                ext._on_insert_command(missing, edit_input, MagicMock())
+            )
         assert result == "created"
         mock_create.assert_awaited_once()
         # The redirected edit_input must carry CREATE + file_text=content.
@@ -153,8 +159,7 @@ class TestInsertMissingFileRedirectsToCreate:
         assert passed.command == ant.TextEditorCommand.CREATE
         assert passed.file_text == "full content"
 
-    @pytest.mark.asyncio
-    async def test_insert_missing_file_no_content_still_errors(self, tmp_path):
+    def test_insert_missing_file_no_content_still_errors(self, tmp_path):
         # No content → don't silently create an empty file; the directive fires.
         ext = _ext()
         missing = tmp_path / "does_not_exist.py"
@@ -164,12 +169,13 @@ class TestInsertMissingFileRedirectsToCreate:
         )
         with patch.object(ext, "_on_create_command", new=AsyncMock()) as mock_create:
             with pytest.raises(ValueError) as ei:
-                await ext._on_insert_command(missing, edit_input, MagicMock())
+                asyncio.run(
+                    ext._on_insert_command(missing, edit_input, MagicMock())
+                )
         assert "insert_line" in str(ei.value)
         mock_create.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_insert_existing_file_no_redirect(self, tmp_path):
+    def test_insert_existing_file_no_redirect(self, tmp_path):
         # Existing file + valid insert → normal insert path, no create redirect.
         ext = _ext()
         existing = tmp_path / "real.py"
@@ -180,7 +186,9 @@ class TestInsertMissingFileRedirectsToCreate:
         )
         with patch.object(ext, "_on_create_command", new=AsyncMock()) as mock_create, \
              patch.object(ext, "_on_insert", new=AsyncMock(return_value="inserted-ok")) as mock_insert:
-            result = await ext._on_insert_command(existing, edit_input, MagicMock())
+            result = asyncio.run(
+                ext._on_insert_command(existing, edit_input, MagicMock())
+            )
         assert result == "inserted-ok"
         mock_create.assert_not_awaited()
         mock_insert.assert_awaited_once()
