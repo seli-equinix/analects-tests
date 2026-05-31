@@ -138,13 +138,20 @@ class TestWriteMemoryDirectives:
             "content": "",
         })
 
-    def test_workspace_path_redirects(self):
-        with pytest.raises(ValueError) as excinfo:
-            _pre_validate_memory_tool_input("write_memory", {
-                "path": "/workspace/EVA/foo.md",
-                "content": "x",
-            })
-        assert "str_replace_editor" in str(excinfo.value)
+    def test_workspace_path_normalized_not_rejected(self):
+        # 2026-05-30 (P22486 fix): write_memory NORMALIZES an absolute
+        # /workspace path to a relative memory path in place, rather than
+        # rejecting it (rejecting derailed the agent into a retry loop).
+        inp = {"path": "/workspace/EVA/foo.md", "content": "x"}
+        _pre_validate_memory_tool_input("write_memory", inp)  # no raise
+        assert inp["path"] == "EVA/foo.md", inp
+
+    def test_bare_absolute_path_normalized(self):
+        # A bare absolute path (e.g. "/plan/...") also lands inside the
+        # memory namespace by stripping the leading slash.
+        inp = {"path": "/plan/progress.md", "content": "x"}
+        _pre_validate_memory_tool_input("write_memory", inp)
+        assert inp["path"] == "plan/progress.md", inp
 
     def test_valid_input_returns_silently(self):
         _pre_validate_memory_tool_input("write_memory", {
@@ -187,17 +194,32 @@ class TestReadMemoryDirectives:
         assert "str_replace_editor" in msg or "view" in msg.lower()
 
 
-# ── search_memory directives ─────────────────────────────────────────
+# ── search_memory: NO required fields (P22496 regression fix) ─────────
 
 
-class TestSearchMemoryDirectives:
-    def test_missing_query(self):
-        with pytest.raises(ValueError) as excinfo:
-            _pre_validate_memory_tool_input("search_memory", {})
-        msg = str(excinfo.value)
-        assert "query" in msg
-        # Cross-session alternative:
-        assert "search_notes" in msg
+class TestSearchMemoryHasNoRequiredFields:
+    """SearchMemoryInput has only Optional fields (path_pattern,
+    content_pattern, tags) + max_results — and NO `query` field. The
+    earlier "search_memory requires query" check was a bug that rejected
+    every valid pattern search (P22496/P22497/P22503/P22507/P22493).
+    Pre-validation must now accept all of these without raising."""
+
+    def test_path_pattern_only_does_not_raise(self):
+        _pre_validate_memory_tool_input("search_memory", {
+            "path_pattern": "research/*", "max_results": 20,
+        })
+
+    def test_content_pattern_only_does_not_raise(self):
+        _pre_validate_memory_tool_input("search_memory", {
+            "content_pattern": "anomaly|isolation|forest",
+        })
+
+    def test_tags_only_does_not_raise(self):
+        _pre_validate_memory_tool_input("search_memory", {"tags": ["x"]})
+
+    def test_empty_search_does_not_raise(self):
+        # An empty search legitimately means "list all" — valid.
+        _pre_validate_memory_tool_input("search_memory", {})
 
 
 # ── Non-dict inputs pass through (let Pydantic handle) ───────────────

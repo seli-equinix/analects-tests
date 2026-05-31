@@ -179,18 +179,25 @@ def _make_graph_extension(session: MagicMock):
 
 
 @pytest.mark.asyncio
-async def test_analyze_impact_resolves_file_path_to_module_entry():
-    """When file_path is passed, the handler builds qualified_name as
-    '<file_path>::__module__' so the Cypher matches the synthetic
-    module-entry node."""
+async def test_analyze_impact_file_path_matches_any_function_in_file():
+    """file_path mode (2026-05-22 change): when file_path is passed WITHOUT
+    qualified_name, the handler matches ANY :Function in the file via
+    `WHERE sym.file_path = $file_path` — NOT the synthetic
+    `<file>::__module__` entry. The old __module__-only resolution returned
+    empty for library files (no module body) and broke eva-full-trace /
+    code-intelligence; this is the corrected contract.
+
+    Also guards P22547: a result row lacking a `hops` key (here it carries
+    `depth`) must not crash confidence() with `None - 1`.
+    """
     rows = [
         {
-            "name": "step_a.py::__module__",
-            "qname": "/workspace/orch/step_a.py::__module__",
-            "file_path": "/workspace/orch/step_a.py",
-            "depth": 1,
-            "edge_methods": ["subprocess"],
-            "is_module": True,
+            "name": "helper_fn",
+            "qname": "/workspace/orch/orchestrator.py::helper_fn",
+            "file_path": "/workspace/orch/caller.py",
+            "depth": 1,   # note: NO `hops` key — confidence() must tolerate
+            "edge_methods": ["direct"],
+            "is_module": False,
         },
     ]
     session, calls = _make_session([rows, []])
@@ -201,13 +208,16 @@ async def test_analyze_impact_resolves_file_path_to_module_entry():
         "direction": "downstream",
     })
     parsed = json.loads(out)
-    assert "error" not in parsed
-    # First Cypher call must reference qualified_name = file::__module__
+    assert "error" not in parsed, parsed
+    # New contract: the Cypher filters by sym.file_path (match-any-function),
+    # and the param is the bare file_path — NOT `<file>::__module__`.
     first_query, first_params = calls[0]
-    assert any(
-        "/workspace/orch/orchestrator.py::__module__" == v
+    assert "sym.file_path = $file_path" in first_query, first_query
+    assert first_params.get("file_path") == "/workspace/orch/orchestrator.py"
+    assert not any(
+        isinstance(v, str) and v.endswith("::__module__")
         for v in first_params.values()
-    )
+    ), f"file_path mode must not resolve to ::__module__ anymore: {first_params}"
 
 
 @pytest.mark.asyncio
