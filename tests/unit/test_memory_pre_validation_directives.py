@@ -78,19 +78,30 @@ class TestEditMemoryDirectives:
         assert "old_str" in msg
         assert "write_memory" in msg
 
-    def test_workspace_path_redirects_to_str_replace_editor(self):
-        with pytest.raises(ValueError) as excinfo:
-            _pre_validate_memory_tool_input("edit_memory", {
-                "path": "/workspace/EVA/research/add_vm_from_template_callers.md",
-                "old_str": "x",
-                "new_str": "y",
-            })
-        msg = str(excinfo.value)
-        assert "workspace" in msg.lower()
-        assert "str_replace_editor" in msg, (
-            "P22165 reproducer — when LLM passes /workspace/ path to "
-            "edit_memory, must redirect to str_replace_editor; got: " + msg
+    def test_workspace_path_normalized_not_rejected(self):
+        # edit_memory used to REJECT a /workspace path (redirect to
+        # str_replace_editor); that raised a hard tool_errors failure the
+        # model couldn't cleanly recover from (sweep regression
+        # api-sdk-docs/powershell-docs 2026-06-02). It now NORMALIZES the
+        # absolute path to a relative memory-node path IN PLACE and
+        # proceeds — mirroring write_memory's tolerance.
+        inp = {
+            "path": "/workspace/EVA/research/add_vm_from_template_callers.md",
+            "old_str": "x",
+            "new_str": "y",
+        }
+        _pre_validate_memory_tool_input("edit_memory", inp)  # must NOT raise
+        assert inp["path"] == "EVA/research/add_vm_from_template_callers.md", (
+            "edit_memory must strip the /workspace/ prefix to a relative "
+            f"memory path; got {inp['path']!r}"
         )
+
+    def test_bare_absolute_path_normalized(self):
+        # A bare leading "/" (e.g. "/plan/foo.md") is also normalized to a
+        # relative memory node path rather than addressing a missing node.
+        inp = {"path": "/plan/powershell-module.md", "old_str": "x", "new_str": "y"}
+        _pre_validate_memory_tool_input("edit_memory", inp)
+        assert inp["path"] == "plan/powershell-module.md"
 
     def test_valid_input_returns_silently(self):
         # All three required fields present, no workspace prefix → pass.
