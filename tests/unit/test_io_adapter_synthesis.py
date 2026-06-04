@@ -141,6 +141,37 @@ class TestSynthesisStashAndCoT:
         assert io.get_response_text() == "brand new answer"
 
 
+class TestStripLeadingCoTPreamble:
+    """A chunk that leads with a CoT preamble but carries the real answer after
+    a blank line must keep the answer (complex_multi_file turn 3)."""
+
+    def test_preamble_then_answer_keeps_answer(self):
+        io = _new()
+        _feed(io,
+              "The user wants to review the ops.py file, so I'll use "
+              "str_replace_editor to view it.\n\n\n"
+              "Here's the contents of /workspace/calc_ops.py:\n\n"
+              "```python\ndef add(a, b): return a + b\ndef subtract(a, b): return a - b\n```")
+        out = io.get_response_text()
+        assert "def add" in out and "def subtract" in out, out
+        # the leading 'I'll use str_replace_editor to view it' preamble is gone
+        assert "I'll use str_replace_editor to view it" not in out
+
+    def test_pure_preamble_single_paragraph_unchanged_path(self):
+        # No blank line + pure CoT → strip helper returns it unchanged, caller
+        # keeps it as the first chunk (never-empty fallback) — behavior preserved.
+        io = _new()
+        _feed(io, "The user wants me to do something specific here and now.")
+        assert io.get_response_text() == "The user wants me to do something specific here and now."
+
+    def test_strip_helper_direct(self):
+        from confucius.server.io_adapter import _strip_leading_cot_paragraphs as strip
+        assert strip("I'll do X.\n\nHere is the answer: 42") == "Here is the answer: 42"
+        assert strip("The answer is 42.\n\nmore detail") == "The answer is 42.\n\nmore detail"  # first para not CoT
+        assert strip("I'll do X. The answer is 42.") == "I'll do X. The answer is 42."  # single para → unchanged
+        assert strip("Let me check.\n\nThe user wants Y.\n\nResult: ok") == "Result: ok"  # two CoT paras
+
+
 class TestHasRealAnswer:
     def test_empty_buffer_has_no_real_answer(self):
         assert _new().has_real_answer() is False
