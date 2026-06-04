@@ -31,10 +31,10 @@ pytest.importorskip(
 from confucius.server.dual_model_orchestrator import DualModelOrchestrator  # noqa: E402
 
 
-def _ctx(response_text: str):
+def _ctx(has_real_answer: bool):
     """Mock AnalectRunContext capturing injected messages."""
     io = MagicMock()
-    io.get_response_text = MagicMock(return_value=response_text)
+    io.has_real_answer = MagicMock(return_value=has_real_answer)
     io.clear_response_text = AsyncMock()
     mm = MagicMock()
     mm.added = []
@@ -56,11 +56,12 @@ def _run(self_obj, ctx):
 
 
 class TestEmitSynthesis:
-    def test_no_answer_forces_summary_nudge(self):
+    def test_no_real_answer_forces_summary_nudge(self):
+        # has_real_answer() False → only a CoT preamble (or empty) after tool work
         s = _stub_self()
-        ctx, io, mm = _ctx("")  # buffer empty → only CoT was produced
+        ctx, io, mm = _ctx(has_real_answer=False)
         _run(s, ctx)
-        # force-summary path: NO clear (nothing to clear), one message injected
+        # force-summary path: NO clear (nothing real to clear), one message injected
         io.clear_response_text.assert_not_called()
         assert s._synthesis_done is True
         assert len(mm.added) == 1
@@ -71,17 +72,10 @@ class TestEmitSynthesis:
 
     def test_real_answer_uses_normal_synthesis(self):
         s = _stub_self()
-        ctx, io, mm = _ctx("Created ops.py with add(), subtract(), multiply().")
+        ctx, io, mm = _ctx(has_real_answer=True)
         _run(s, ctx)
         # normal synthesis: clears working notes + injects the synthesis prompt
         io.clear_response_text.assert_awaited_once()
         assert s._synthesis_done is True
         assert len(mm.added) == 1
         assert mm.added[0].content == "SYNTHESIS_PROMPT_BODY"
-
-    def test_whitespace_only_answer_treated_as_empty(self):
-        s = _stub_self()
-        ctx, io, mm = _ctx("   \n  ")
-        _run(s, ctx)
-        io.clear_response_text.assert_not_called()
-        assert "have NOT yet answered" in mm.added[0].content

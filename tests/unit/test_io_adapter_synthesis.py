@@ -139,3 +139,23 @@ class TestSynthesisStashAndCoT:
         # a fresh normal answer is unaffected by the stale think-state
         _feed(io, "brand new answer")
         assert io.get_response_text() == "brand new answer"
+
+
+class TestHasRealAnswer:
+    def test_empty_buffer_has_no_real_answer(self):
+        assert _new().has_real_answer() is False
+
+    def test_cot_only_buffer_has_no_real_answer(self):
+        # The complex_multi_file turn-3 case: the only assistant chunk is a
+        # kept CoT preamble → not a real answer → force-summary should fire.
+        io = _new()
+        _feed(io, "The user wants to see the contents of ops.py, so I'll use "
+                  "str_replace_editor to view the file.")
+        assert io.get_response_text()  # the preamble IS buffered (kept first chunk)
+        assert io.has_real_answer() is False
+
+    def test_substantive_answer_is_real(self):
+        io = _new()
+        _feed(io, "The ops.py file defines add(a, b), subtract(a, b), "
+                  "multiply(a, b), and divide(a, b).")
+        assert io.has_real_answer() is True

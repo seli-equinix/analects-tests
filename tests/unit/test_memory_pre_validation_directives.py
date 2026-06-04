@@ -204,6 +204,20 @@ class TestReadMemoryDirectives:
         # Workspace-files redirect:
         assert "str_replace_editor" in msg or "view" in msg.lower()
 
+    def test_workspace_path_normalized_not_rejected(self):
+        # read_memory used to RAISE a redirect on a /workspace path; that hard
+        # tool_errors failure made cross-session-recall loop (2026-06-04). It
+        # now NORMALIZES to a relative memory path (a missing node reads back
+        # as a graceful "no content" result, not an exception).
+        inp = {"path": "/workspace/project-helios/backend/README.md"}
+        _pre_validate_memory_tool_input("read_memory", inp)  # must NOT raise
+        assert inp["path"] == "project-helios/backend/README.md"
+
+    def test_bare_absolute_path_normalized(self):
+        inp = {"path": "/research/foo.md"}
+        _pre_validate_memory_tool_input("read_memory", inp)
+        assert inp["path"] == "research/foo.md"
+
 
 # ── search_memory: NO required fields (P22496 regression fix) ─────────
 
