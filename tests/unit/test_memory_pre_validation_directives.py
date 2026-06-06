@@ -125,11 +125,30 @@ class TestEditMemoryDirectives:
 
 
 class TestWriteMemoryDirectives:
-    def test_missing_path(self):
+    def test_missing_path_with_content_is_auto_derived(self):
+        # P24762 knowledge-pipeline: the planner wrote the full migration
+        # plan via write_memory with NO path. Raising tripped tool_errors and
+        # the model didn't recover. Now: derive a memory path from the
+        # content's first markdown heading and proceed (honor the intent).
+        inp = {"content": "# Django Migration Plan\n\n## Overview\n..."}
+        _pre_validate_memory_tool_input("write_memory", inp)  # must NOT raise
+        assert inp["path"] == "plan/django-migration-plan.md", inp
+
+    def test_missing_path_no_heading_uses_note_slug(self):
+        inp = {"content": "just some prose with no heading"}
+        _pre_validate_memory_tool_input("write_memory", inp)
+        assert inp["path"] == "plan/note.md", inp
+
+    def test_missing_path_and_no_content_still_raises(self):
+        # Genuinely unusable (no path AND no content) → directive raise.
         with pytest.raises(ValueError) as excinfo:
-            _pre_validate_memory_tool_input("write_memory", {
-                "content": "some content",
-            })
+            _pre_validate_memory_tool_input("write_memory", {})
+        assert "path" in str(excinfo.value)
+
+    def test_missing_path_empty_content_still_raises(self):
+        # Empty content gives nothing to derive a path from → raise.
+        with pytest.raises(ValueError) as excinfo:
+            _pre_validate_memory_tool_input("write_memory", {"content": "   "})
         assert "path" in str(excinfo.value)
 
     def test_missing_content(self):
