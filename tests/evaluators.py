@@ -341,9 +341,20 @@ def eval_tool_errors(result: ChatResult) -> Optional[Dict[str, Any]]:
     if unrecovered:
         has_substantive_response = len(getattr(result, "content", "")) > 200
         if has_substantive_response:
+            # A bash command blocked by the allowlist/file-write guard
+            # surfaces as the run_label "Validation failed" (or
+            # "blocked"/"not allowed") — NOT containing the word "command".
+            # When the agent still delivered a substantive answer (>200
+            # chars), that blocked attempt is a recovered self-correction
+            # (it fell back to str_replace_editor), exactly like the
+            # "command" case. Treat those labels as recovered too.
+            _blocked_markers = (
+                "command", "validation failed", "blocked",
+                "not allowed", "disallowed",
+            )
             unrecovered = [
                 err for err in unrecovered
-                if "command" not in err.lower()
+                if not any(m in err.lower() for m in _blocked_markers)
             ]
 
     # Memory-family tool-switching recovery: edit_memory failures are

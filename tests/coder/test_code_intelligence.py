@@ -71,10 +71,18 @@ class TestCodeIntelligence:
         content1 = r1.content.lower()
         trace_test.set_attribute("cca.test.t1_has_graph_data", True)
 
-        # Fail fast if the graph returned empty (data integrity issue)
+        # Fail fast if the graph returned empty (data integrity issue).
+        # Use only UNAMBIGUOUS "no callers" phrasings. Earlier this list
+        # included "empty"/"no results"/"not found in"/"does not exist",
+        # which collide with normal prose in a rich, correct answer (P24927:
+        # the graph returned 133 callers and the model said "called by 50+
+        # functions", but the word "empty" elsewhere tripped the check). The
+        # positive has_real_callers assertion below is the real data-presence
+        # gate; this only catches a genuine "Connect-SessionVC has no callers".
         no_data_signals = [
-            "no callers", "0 callers", "no results", "empty",
-            "no functions call", "not found in", "does not exist",
+            "no callers", "0 callers", "zero callers",
+            "no functions call", "no other functions call",
+            "isn't called by", "is not called by", "has no caller",
         ]
         has_no_data = any(s in content1 for s in no_data_signals)
         assert not has_no_data, (

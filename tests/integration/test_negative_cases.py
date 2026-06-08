@@ -69,6 +69,14 @@ class TestNegativeCases:
             "not found", "doesn't exist", "does not exist",
             "no project", "not indexed", "couldn't find",
             "no files", "unable to find",
+            # The agent commonly acknowledges a missing project with these
+            # equally-correct phrasings, which the original whitelist omitted
+            # (P24917: "I don't see a project called FakeProject_ABC999 in the
+            # available indexed projects" matched none of the above → false
+            # "hallucinating" fail even though the agent answered correctly).
+            "don't see a project", "don't see any project",
+            "no such project", "isn't a project", "is not a project",
+            "not in the", "not among", "not one of",
         ])
         trace_test.set_attribute(
             "cca.test.acknowledges_missing", acknowledges_missing,

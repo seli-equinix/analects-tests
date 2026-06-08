@@ -52,6 +52,46 @@ class TestRepetitionDetector:
         if result_content is None:
             assert result_path is not None, "per-field override not applied"
 
+    def test_coverage_independent_backstop_fires_on_minority_run_in_file_text(self):
+        # P24924 api-lookup: a degenerate exact-repeated run that is a MINORITY
+        # of a long file_text body sits BELOW the coverage gate, so the
+        # coverage-gated is_degenerate misses it — but it still corrupts the
+        # file. The coverage-independent find_degenerate_run backstop must fire
+        # for tool-arg fields regardless of coverage.
+        d = RepetitionDetector()
+        legit = "".join(
+            f"def func_{i}(a, b):\n    return a + b + {i}\n\n" for i in range(120)
+        )  # ~4000 chars of legit, varied code
+        degen = "x = settings.py/" * 30  # ~480-char exact-repeated degenerate run
+        buf = legit + degen  # degen is ~11% of the buffer — below any coverage gate
+        result = d.check(buf, "tool_call[0].args.file_text", "")
+        assert result is not None, "minority degenerate run must fire the backstop"
+        assert "coverage-independent" in result.reason
+
+    def test_backstop_does_not_fire_on_prose_field(self):
+        # Prose fields keep the structure-aware path ONLY — the
+        # coverage-independent backstop must NOT apply to content/reasoning
+        # (it would false-fire on legitimate repeated markdown structure).
+        d = RepetitionDetector()
+        legit = "## Section\n\nSome analysis prose here. " * 50
+        degen = "x = settings.py/" * 30
+        buf = legit + degen
+        result = d.check(buf, "content", "")
+        # content is prose → structure-aware path; the minority degen run does
+        # not trip the (coverage-gated, structure-aware) prose check.
+        assert result is None or "coverage-independent" not in (result.reason or "")
+
+    def test_backstop_does_not_fire_on_legit_varied_file(self):
+        # Legit code with similar-but-varying lines (different values) must NOT
+        # trip the backstop — find_degenerate_run requires an EXACT repeated unit.
+        d = RepetitionDetector()
+        buf = "".join(
+            f"    self.field_{i} = config.get('key_{i}', default_{i})\n"
+            for i in range(300)
+        )
+        result = d.check(buf, "tool_call[0].args.file_text", "")
+        assert result is None
+
 
 class TestLowEntropyDetector:
     def test_fires_on_iagiag_tail(self):
